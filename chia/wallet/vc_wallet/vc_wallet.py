@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Type, TypeVar, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, Type, TypeVar, Union
 
 from blspy import G1Element, G2Element
 from clvm.casts import int_to_bytes
@@ -19,6 +19,7 @@ from chia.types.spend_bundle import SpendBundle
 from chia.util.hash import std_hash
 from chia.util.ints import uint32, uint64, uint128
 from chia.wallet.did_wallet.did_wallet import DIDWallet
+from chia.wallet.payment import Payment
 from chia.wallet.puzzle_drivers import Solver
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import solution_for_conditions
 from chia.wallet.sign_coin_spends import sign_coin_spends
@@ -28,7 +29,7 @@ from chia.wallet.uncurried_puzzle import uncurry_puzzle
 from chia.wallet.util.compute_memos import compute_memos
 from chia.wallet.util.transaction_type import TransactionType
 from chia.wallet.util.wallet_sync_utils import fetch_coin_spend_for_coin_state
-from chia.wallet.util.wallet_types import AmountWithPuzzlehash, WalletType
+from chia.wallet.util.wallet_types import WalletType
 from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, PENDING_VC_ANNOUNCEMENT, CRCATSpend
 from chia.wallet.vc_wallet.vc_drivers import VerifiedCredential
 from chia.wallet.vc_wallet.vc_store import VCProofs, VCRecord, VCStore
@@ -36,13 +37,14 @@ from chia.wallet.wallet import Wallet
 from chia.wallet.wallet_coin_record import WalletCoinRecord
 from chia.wallet.wallet_info import WalletInfo
 
+if TYPE_CHECKING:
+    from chia.wallet.wallet_state_manager import WalletStateManager
+
 _T_VCWallet = TypeVar("_T_VCWallet", bound="VCWallet")
 
 
 class VCWallet:
-    # WalletStateManager is only imported for type hinting thus leaving pylint
-    # unable to process this
-    wallet_state_manager: Any  # pylint: disable=used-before-assignment
+    wallet_state_manager: WalletStateManager
     log: logging.Logger
     standard_wallet: Wallet
     wallet_info: WalletInfo
@@ -51,7 +53,7 @@ class VCWallet:
     @classmethod
     async def create_new_vc_wallet(
         cls: Type[_T_VCWallet],
-        wallet_state_manager: Any,
+        wallet_state_manager: WalletStateManager,
         wallet: Wallet,
         name: Optional[str] = None,
     ) -> _T_VCWallet:
@@ -62,13 +64,13 @@ class VCWallet:
         self.log = logging.getLogger(name if name else __name__)
         self.store = wallet_state_manager.vc_store
         self.wallet_info = await wallet_state_manager.user_store.create_wallet(name, uint32(WalletType.VC.value), "")
-        await self.wallet_state_manager.add_new_wallet(self, False)
+        await self.wallet_state_manager.add_new_wallet(self)
         return self
 
     @classmethod
     async def create(
         cls: Type[_T_VCWallet],
-        wallet_state_manager: Any,
+        wallet_state_manager: WalletStateManager,
         wallet: Wallet,
         wallet_info: WalletInfo,
         name: Optional[str] = None,
@@ -149,12 +151,12 @@ class VCWallet:
         if not found_did:
             raise ValueError(f"You don't own the DID {provider_did.hex()}")
         # Mint VC
-        coins = await self.standard_wallet.select_coins(uint64(2 + fee), min_coin_amount=uint64(2 + fee))
+        coins = await self.standard_wallet.select_coins(uint64(1 + fee), min_coin_amount=uint64(1 + fee))
         if len(coins) == 0:
             raise ValueError("Cannot find a coin to mint the verified credential.")
         if inner_puzzle_hash is None:
             inner_puzzle_hash = await self.standard_wallet.get_puzzle_hash(new=False)
-        original_coin = coins.copy().pop()
+        original_coin = coins.pop()
         dpuz, coin_spends, vc = VerifiedCredential.launch(
             original_coin,
             provider_did,
@@ -234,13 +236,11 @@ class VCWallet:
         else:
             puzzle_announcements_bytes = None
 
-        primaries: List[AmountWithPuzzlehash] = [
-            {"puzzlehash": new_inner_puzhash, "amount": uint64(vc_record.vc.coin.amount), "memos": [new_inner_puzhash]}
-        ]
+        primaries: List[Payment] = [Payment(new_inner_puzhash, uint64(vc_record.vc.coin.amount), [new_inner_puzhash])]
 
         if fee > 0:
             announcement_to_make = vc_record.vc.coin.name()
-            chia_tx = await self.create_tandem_xch_tx(
+            chia_tx = await self.wallet_state_manager.main_wallet.create_tandem_xch_tx(
                 fee, Announcement(vc_record.vc.coin.name(), announcement_to_make), reuse_puzhash=reuse_puzhash
             )
             if coin_announcements is None:
@@ -337,17 +337,20 @@ class VCWallet:
         vc: VerifiedCredential = VerifiedCredential.get_next_from_coin_spend(cs)
 
         # Check if we own the DID
-        found_did = False
-        for _, did_wallet in self.wallet_state_manager.wallets.items():
-            if did_wallet.type() == WalletType.DECENTRALIZED_ID:
-                assert isinstance(did_wallet, DIDWallet)
-                if bytes32.fromhex(did_wallet.get_my_DID()) == vc.proof_provider:
-                    found_did = True
+        did_wallet: DIDWallet
+        for _, wallet in self.wallet_state_manager.wallets.items():
+            if wallet.type() == WalletType.DECENTRALIZED_ID:
+                assert isinstance(wallet, DIDWallet)
+                if bytes32.fromhex(wallet.get_my_DID()) == vc.proof_provider:
+                    did_wallet = wallet
                     break
-        if not found_did:
+        else:
             raise ValueError(f"You don't own the DID {vc.proof_provider.hex()}")
 
-        _, provider_inner_puzhash, _ = await did_wallet.get_info_for_recovery()
+        recovery_info: Optional[Tuple[bytes32, bytes32, uint64]] = await did_wallet.get_info_for_recovery()
+        if recovery_info is None:
+            raise RuntimeError("DID could not currently be accessed while trying to revoke VC")
+        _, provider_inner_puzhash, _ = recovery_info
 
         # Generate spend specific nonce
         coins = await did_wallet.select_coins(uint64(1))
@@ -386,7 +389,9 @@ class VCWallet:
             memos=list(compute_memos(final_bundle).items()),
         )
         if fee > 0:
-            chia_tx: TransactionRecord = await self.create_tandem_xch_tx(fee, vc_announcement, reuse_puzhash)
+            chia_tx: TransactionRecord = await self.wallet_state_manager.main_wallet.create_tandem_xch_tx(
+                fee, vc_announcement, reuse_puzhash
+            )
             assert tx.spend_bundle is not None
             assert chia_tx.spend_bundle is not None
             tx = dataclasses.replace(tx, spend_bundle=SpendBundle.aggregate([chia_tx.spend_bundle, tx.spend_bundle]))
@@ -535,7 +540,7 @@ class VCWallet:
         max_coin_amount: Optional[uint64] = None,
         excluded_coin_amounts: Optional[List[uint64]] = None,
     ) -> Set[Coin]:
-        raise RuntimeError("NFTWallet does not support select_coins()")
+        raise RuntimeError("VCWallet does not support select_coins()")
 
     async def get_confirmed_balance(self, record_list: Optional[Set[WalletCoinRecord]] = None) -> uint128:
         """The VC wallet doesn't really have a balance."""

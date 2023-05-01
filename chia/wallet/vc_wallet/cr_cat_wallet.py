@@ -28,7 +28,7 @@ from chia.wallet.transaction_record import TransactionRecord
 from chia.wallet.util.compute_memos import compute_memos
 from chia.wallet.util.transaction_type import TransactionType
 from chia.wallet.util.wallet_sync_utils import fetch_coin_spend_for_coin_state
-from chia.wallet.util.wallet_types import AmountWithPuzzlehash, WalletType
+from chia.wallet.util.wallet_types import WalletType
 from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, ProofsChecker
 from chia.wallet.vc_wallet.cr_cat_store import CRCATStore
 from chia.wallet.vc_wallet.vc_drivers import VerifiedCredential
@@ -284,9 +284,9 @@ class CRCATWallet(CATWallet):
 
         # Calculate standard puzzle solutions
         change = selected_cat_amount - starting_amount
-        primaries: List[AmountWithPuzzlehash] = []
+        primaries: List[Payment] = []
         for payment in payments:
-            primaries.append({"puzzlehash": payment.puzzle_hash, "amount": payment.amount, "memos": payment.memos})
+            primaries.append(payment)
 
         if change > 0:
             derivation_record = await self.wallet_state_manager.puzzle_store.get_derivation_record_for_puzzle_hash(
@@ -301,7 +301,7 @@ class CRCATWallet(CATWallet):
                         break
             else:
                 change_puzhash = await self.get_new_inner_hash()
-            primaries.append({"puzzlehash": change_puzhash, "amount": uint64(change), "memos": []})
+            primaries.append(Payment(change_puzhash, uint64(change), []))
 
         # Find the VC Wallet
         vc_wallet: VCWallet

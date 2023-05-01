@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import pathlib
 import sys
@@ -831,6 +832,80 @@ async def get_did(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) 
         print(f"Failed to get DID: {e}")
 
 
+async def get_did_info(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
+    coin_id: str = args["coin_id"]
+    latest: bool = args["latest"]
+    did_padding_length = 23
+    try:
+        response = await wallet_client.get_did_info(coin_id, latest)
+        print(f"{'DID:'.ljust(did_padding_length)} {response['did_id']}")
+        print(f"{'Coin ID:'.ljust(did_padding_length)} {response['latest_coin']}")
+        print(f"{'Inner P2 Address:'.ljust(did_padding_length)} {response['p2_address']}")
+        print(f"{'Public Key:'.ljust(did_padding_length)} {response['public_key']}")
+        print(f"{'Launcher ID:'.ljust(did_padding_length)} {response['launcher_id']}")
+        print(f"{'DID Metadata:'.ljust(did_padding_length)} {response['metadata']}")
+        print(f"{'Recovery List Hash:'.ljust(did_padding_length)} {response['recovery_list_hash']}")
+        print(f"{'Recovery Required Verifications:'.ljust(did_padding_length)} {response['num_verification']}")
+        print(f"{'Last Spend Puzzle:'.ljust(did_padding_length)} {response['full_puzzle']}")
+        print(f"{'Last Spend Solution:'.ljust(did_padding_length)} {response['solution']}")
+        print(f"{'Last Spend Hints:'.ljust(did_padding_length)} {response['hints']}")
+
+    except Exception as e:
+        print(f"Failed to get DID details: {e}")
+
+
+async def update_did_metadata(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
+    try:
+        response = await wallet_client.update_did_metadata(
+            args["did_wallet_id"], json.loads(args["metadata"]), args["reuse_puzhash"]
+        )
+        print(f"Successfully updated DID wallet ID: {response['wallet_id']}, Spend Bundle: {response['spend_bundle']}")
+    except Exception as e:
+        print(f"Failed to update DID metadata: {e}")
+
+
+async def did_message_spend(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
+    try:
+        response = await wallet_client.did_message_spend(
+            args["did_wallet_id"], args["puzzle_announcements"], args["coin_announcements"]
+        )
+        print(f"Message Spend Bundle: {response['spend_bundle']}")
+    except Exception as e:
+        print(f"Failed to update DID metadata: {e}")
+
+
+async def transfer_did(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
+    try:
+        response = await wallet_client.did_transfer_did(
+            args["did_wallet_id"],
+            args["target_address"],
+            args["fee"],
+            args["with_recovery"],
+            args["reuse_puzhash"],
+        )
+        print(f"Successfully transferred DID to {args['target_address']}")
+        print(f"Transaction ID: {response['transaction_id']}")
+        print(f"Transaction: {response['transaction']}")
+    except Exception as e:
+        print(f"Failed to transfer DID: {e}")
+
+
+async def find_lost_did(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
+    try:
+        response = await wallet_client.find_lost_did(
+            args["coin_id"],
+            args["recovery_list_hash"],
+            args["metadata"],
+            args["num_verification"],
+        )
+        if response["success"]:
+            print(f"Successfully found lost DID {args['coin_id']}, latest coin ID: {response['latest_coin_id']}")
+        else:
+            print(f"Cannot find lost DID {args['coin_id']}: {response['error']}")
+    except Exception as e:
+        print(f"Failed to find lost DID: {e}")
+
+
 async def create_nft_wallet(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
     did_id = args["did_id"]
     name = args["name"]
@@ -1139,7 +1214,7 @@ async def sign_message(args: Dict, wallet_client: WalletRpcClient, fingerprint: 
 
 async def mint_vc(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
     config = load_config(DEFAULT_ROOT_PATH, "config.yaml", SERVICE_NAME)
-    vc_record, txs = await wallet_client.vc_mint_vc(
+    vc_record, txs = await wallet_client.vc_mint(
         decode_puzzle_hash(ensure_valid_address(args["did"], allowed_types={AddressType.DID}, config=config)),
         None
         if args["target_address"] is None
@@ -1164,7 +1239,7 @@ async def mint_vc(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) 
 
 async def get_vcs(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
     config = load_config(DEFAULT_ROOT_PATH, "config.yaml", SERVICE_NAME)
-    vc_records, proofs = await wallet_client.vc_get_vc_list(args["start"], args["count"])
+    vc_records, proofs = await wallet_client.vc_get_list(args["start"], args["count"])
     print("Proofs:")
     for hash, proof_dict in proofs.items():
         print(f"- {hash}")
@@ -1185,7 +1260,7 @@ async def get_vcs(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) 
 
 async def spend_vc(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
     config = load_config(DEFAULT_ROOT_PATH, "config.yaml", SERVICE_NAME)
-    txs = await wallet_client.vc_spend_vc(
+    txs = await wallet_client.vc_spend(
         bytes32.from_hexstr(args["vc_id"]),
         new_puzhash=None if args["new_puzhash"] is None else bytes32.from_hexstr(args["new_puzhash"]),
         new_proof_hash=bytes32.from_hexstr(args["new_proof_hash"]),
@@ -1216,13 +1291,13 @@ async def add_proof_reveal(args: Dict, wallet_client: WalletRpcClient, fingerpri
         print(f"Proof Hash: {VCProofs(proof_dict).root()}")
         return
     else:
-        await wallet_client.add_vc_proofs(proof_dict)
+        await wallet_client.vc_add_proofs(proof_dict)
         print("Proofs added to DB successfully!")
         return
 
 
 async def get_proofs_for_root(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
-    proof_dict: Dict[str, str] = await wallet_client.get_proofs_for_root(bytes32.from_hexstr(args["proof_hash"]))
+    proof_dict: Dict[str, str] = await wallet_client.vc_get_proofs_for_root(bytes32.from_hexstr(args["proof_hash"]))
     print("Proofs:")
     for proof in proof_dict:
         print(f" - {proof}")
@@ -1230,7 +1305,7 @@ async def get_proofs_for_root(args: Dict, wallet_client: WalletRpcClient, finger
 
 async def revoke_vc(args: Dict, wallet_client: WalletRpcClient, fingerprint: int) -> None:
     config = load_config(DEFAULT_ROOT_PATH, "config.yaml", SERVICE_NAME)
-    txs = await wallet_client.vc_revoke_vc(
+    txs = await wallet_client.vc_revoke(
         bytes32.from_hexstr(args["parent_coin_id"]),
         fee=uint64(0) if args["fee"] is None else uint64(int(Decimal(args["fee"]) * units["chia"])),
         reuse_puzhash=args["reuse_puzhash"],

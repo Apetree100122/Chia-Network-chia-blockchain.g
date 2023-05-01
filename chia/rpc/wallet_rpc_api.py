@@ -33,6 +33,7 @@ from chia.util.errors import KeychainIsLocked
 from chia.util.ints import uint16, uint32, uint64
 from chia.util.keychain import bytes_to_mnemonic, generate_mnemonic
 from chia.util.path import path_from_root
+from chia.util.streamable import Streamable, streamable
 from chia.util.ws_message import WsRpcMessage, create_payload_dict
 from chia.wallet.cat_wallet.cat_constants import DEFAULT_CATS
 from chia.wallet.cat_wallet.cat_wallet import CATWallet
@@ -59,6 +60,7 @@ from chia.wallet.nft_wallet.nft_wallet import NFTWallet
 from chia.wallet.nft_wallet.uncurry_nft import UncurriedNFT
 from chia.wallet.notification_store import Notification
 from chia.wallet.outer_puzzles import AssetType
+from chia.wallet.payment import Payment
 from chia.wallet.puzzle_drivers import PuzzleInfo, Solver
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import puzzle_hash_for_synthetic_public_key
 from chia.wallet.singleton import create_singleton_puzzle
@@ -71,7 +73,7 @@ from chia.wallet.util.compute_hints import compute_coin_hints
 from chia.wallet.util.compute_memos import compute_memos
 from chia.wallet.util.transaction_type import TransactionType
 from chia.wallet.util.wallet_sync_utils import fetch_coin_spend_for_coin_state
-from chia.wallet.util.wallet_types import AmountWithPuzzlehash, WalletType
+from chia.wallet.util.wallet_types import WalletType
 from chia.wallet.vc_wallet.vc_store import VCProofs
 from chia.wallet.vc_wallet.vc_wallet import VCWallet
 from chia.wallet.wallet import CHIP_0002_SIGN_MESSAGE_PREFIX, Wallet
@@ -214,13 +216,13 @@ class WalletRpcApi:
             "/dl_new_mirror": self.dl_new_mirror,
             "/dl_delete_mirror": self.dl_delete_mirror,
             # Verified Credential
-            "/vc_mint_vc": self.vc_mint_vc,
-            "/vc_get_vc": self.vc_get_vc,
-            "/vc_get_vc_list": self.vc_get_vc_list,
-            "/vc_spend_vc": self.vc_spend_vc,
-            "/add_vc_proofs": self.add_vc_proofs,
-            "/get_proofs_for_root": self.get_proofs_for_root,
-            "/vc_revoke_vc": self.vc_revoke_vc,
+            "/vc_mint": self.vc_mint,
+            "/vc_get": self.vc_get,
+            "/vc_get_list": self.vc_get_list,
+            "/vc_spend": self.vc_spend,
+            "/vc_add_proofs": self.vc_add_proofs,
+            "/vc_get_proofs_for_root": self.vc_get_proofs_for_root,
+            "/vc_revoke": self.vc_revoke,
         }
 
     def get_connections(self, request_node_type: Optional[NodeType]) -> List[Dict[str, Any]]:
@@ -1832,13 +1834,17 @@ class WalletRpcApi:
                 hints.append(memo.hex())
         return {
             "success": True,
+            "did_id": encode_puzzle_hash(
+                bytes32.from_hexstr(singleton_struct.rest().first().atom.hex()),
+                AddressType.DID.hrp(self.service.config),
+            ),
             "latest_coin": coin_state.coin.name().hex(),
             "p2_address": encode_puzzle_hash(p2_puzzle.get_tree_hash(), AddressType.XCH.hrp(self.service.config)),
-            "public_key": public_key.as_python().hex(),
-            "recovery_list_hash": recovery_list_hash.as_python().hex(),
+            "public_key": public_key.atom.hex(),
+            "recovery_list_hash": recovery_list_hash.atom.hex(),
             "num_verification": num_verification.as_int(),
             "metadata": program_to_metadata(metadata),
-            "launcher_id": singleton_struct.rest().first().as_python().hex(),
+            "launcher_id": singleton_struct.rest().first().atom.hex(),
             "full_puzzle": full_puzzle,
             "solution": Program.from_bytes(bytes(coin_spend.solution)).as_python(),
             "hints": hints,
@@ -2877,7 +2883,7 @@ class WalletRpcApi:
 
         memos_0 = [] if "memos" not in additions[0] else [mem.encode("utf-8") for mem in additions[0]["memos"]]
 
-        additional_outputs: List[AmountWithPuzzlehash] = []
+        additional_outputs: List[Payment] = []
         for addition in additions[1:]:
             receiver_ph = bytes32.from_hexstr(addition["puzzle_hash"])
             if len(receiver_ph) != 32:
@@ -2886,7 +2892,7 @@ class WalletRpcApi:
             if amount > self.service.constants.MAX_COIN_AMOUNT:
                 raise ValueError(f"Coin amount cannot exceed {self.service.constants.MAX_COIN_AMOUNT}")
             memos = [] if "memos" not in addition else [mem.encode("utf-8") for mem in addition["memos"]]
-            additional_outputs.append({"puzzlehash": receiver_ph, "amount": amount, "memos": memos})
+            additional_outputs.append(Payment(receiver_ph, amount, memos))
 
         fee: uint64 = uint64(request.get("fee", 0))
         min_coin_amount: uint64 = uint64(request.get("min_coin_amount", 0))
@@ -2964,13 +2970,13 @@ class WalletRpcApi:
                 assert isinstance(wallet, CATWallet)
 
                 txs = await wallet.generate_signed_transaction(
-                    [amount_0] + [output["amount"] for output in additional_outputs],
-                    [bytes32(puzzle_hash_0)] + [output["puzzlehash"] for output in additional_outputs],
+                    [amount_0] + [output.amount for output in additional_outputs],
+                    [bytes32(puzzle_hash_0)] + [output.puzzle_hash for output in additional_outputs],
                     fee,
                     coins=coins,
                     exclude_cat_coins=exclude_coins,
                     ignore_max_send_amount=True,
-                    memos=[memos_0] + [output["memos"] for output in additional_outputs],
+                    memos=[memos_0] + [output.memos for output in additional_outputs],
                     coin_announcements_to_consume=coin_announcements,
                     puzzle_announcements_to_consume=puzzle_announcements,
                     min_coin_amount=min_coin_amount,
@@ -3268,17 +3274,28 @@ class WalletRpcApi:
     ##########################################################################################
     # Verified Credential
     ##########################################################################################
-    async def vc_mint_vc(self, request) -> Dict:
+    async def vc_mint(self, request) -> Dict:
         """
         Mint a verified credential using the assigned DID
-        :param request:
-        :return:
+        :param request: We require 'did_id' that will be minting the VC and options for a new 'target_address' as well
+        as a 'fee' for the mint tx
+        :return: a 'vc_record' containing all the information of the soon-to-be-confirmed vc as well as any relevant
+        'transactions'
         """
-        did_id = decode_puzzle_hash(request["did_id"])
-        target_address = request.get("target_address", None)
+
+        @streamable
+        @dataclasses.dataclass(frozen=True)
+        class VCMint(Streamable):
+            did_id: str
+            target_address: Optional[str] = None
+            fee: uint64 = uint64(0)
+
+        parsed_request = VCMint.from_json_dict(request)
+
+        did_id = decode_puzzle_hash(parsed_request.did_id)
         puzhash: Optional[bytes32] = None
-        if target_address is not None:
-            puzhash = decode_puzzle_hash(target_address)
+        if parsed_request.target_address is not None:
+            puzhash = decode_puzzle_hash(parsed_request.target_address)
         # get VC wallet
         for _, wallet in self.service.wallet_state_manager.wallets.items():
             if WalletType(wallet.type()) == WalletType.VC:
@@ -3290,7 +3307,7 @@ class WalletRpcApi:
             vc_wallet = await VCWallet.create_new_vc_wallet(
                 self.service.wallet_state_manager, self.service.wallet_state_manager.main_wallet
             )
-        vc_record, tx_list = await vc_wallet.launch_new_vc(did_id, puzhash, uint64(request.get("fee", 0)))
+        vc_record, tx_list = await vc_wallet.launch_new_vc(did_id, puzhash, parsed_request.fee)
         for tx in tx_list:
             await self.service.wallet_state_manager.add_pending_transaction(tx)
         return {
@@ -3298,25 +3315,40 @@ class WalletRpcApi:
             "transactions": [tx.to_json_dict_convenience(self.service.config) for tx in tx_list],
         }
 
-    async def vc_get_vc(self, request) -> Dict:
+    async def vc_get(self, request) -> Dict:
         """
         Given a launcher ID get the verified credential
-        :param request:
-        :return:
+        :param request: the 'vc_id' launcher id of a verifiable credential
+        :return: the 'vc_record' representing the specified verifiable credential
         """
-        vc_record = await self.service.wallet_state_manager.vc_store.get_vc_record(
-            bytes32.from_hexstr(request["vc_id"])
-        )
+
+        @streamable
+        @dataclasses.dataclass(frozen=True)
+        class VCGet(Streamable):
+            vc_id: bytes32
+
+        parsed_request = VCGet.from_json_dict(request)
+
+        vc_record = await self.service.wallet_state_manager.vc_store.get_vc_record(parsed_request.vc_id)
         return {"vc_record": vc_record}
 
-    async def vc_get_vc_list(self, request) -> Dict:
+    async def vc_get_list(self, request) -> Dict:
         """
         Get a list of verified credentials
-        :param request:
-        :return:
+        :param request: optional parameters for pagination 'start' and 'count'
+        :return: all 'vc_records' in the specified range and any 'proofs' associated with the roots contained within
         """
+
+        @streamable
+        @dataclasses.dataclass(frozen=True)
+        class VCGetList(Streamable):
+            start: uint32 = uint32(0)
+            end: uint32 = uint32(50)
+
+        parsed_request = VCGetList.from_json_dict(request)
+
         vc_list = await self.service.wallet_state_manager.vc_store.get_vc_record_list(
-            request.get("start", 0), request.get("count", 50)
+            parsed_request.start, parsed_request.end
         )
         return {
             "vc_records": [{"coin_id": "0x" + vc.vc.coin.name().hex(), **vc.to_json_dict()} for vc in vc_list],
@@ -3330,24 +3362,26 @@ class WalletRpcApi:
             },
         }
 
-    async def vc_spend_vc(self, request) -> Dict:
+    async def vc_spend(self, request) -> Dict:
         """
         Spend a verified credential
-        :param request:
-        :return:
+        :param request: Required 'vc_id' launcher id of the vc we wish to spend. Optional paramaters for a 'new_puzhash'
+        for the vc to end up at and 'new_proof_hash' & 'provider_inner_puzhash' which can be used to update the vc's
+        proofs. Also standard 'fee' & 'reuse_puzhash' parameters for the transaction.
+        :return: a list of all relevant 'transactions' to perform this spend
         """
-        vc_id: bytes32 = bytes32.from_hexstr(request["vc_id"])
-        new_puzhash: Optional[bytes32] = None
-        if "new_puzhash" in request and request["new_puzhash"] is not None:
-            new_puzhash = bytes32.from_hexstr(request["new_puzhash"])
 
-        new_proof_hash: Optional[bytes32] = None
-        if "new_proof_hash" in request and request["new_proof_hash"] is not None:
-            new_proof_hash = bytes32.from_hexstr(request["new_proof_hash"])
+        @streamable
+        @dataclasses.dataclass(frozen=True)
+        class VCSpend(Streamable):
+            vc_id: bytes32
+            new_puzhash: Optional[bytes32] = None
+            new_proof_hash: Optional[bytes32] = None
+            provider_inner_puzhash: Optional[bytes32] = None
+            fee: uint64 = uint64(0)
+            reuse_puzhash: Optional[bool] = None
 
-        provider_inner_puzhash: Optional[bytes32] = None
-        if "provider_inner_puzhash" in request and request["provider_inner_puzhash"] is not None:
-            provider_inner_puzhash = bytes32.from_hexstr(request["provider_inner_puzhash"])
+        parsed_request = VCSpend.from_json_dict(request)
 
         # get VC wallet
         for _, wallet in self.service.wallet_state_manager.wallets.items():
@@ -3361,12 +3395,12 @@ class WalletRpcApi:
                 self.service.wallet_state_manager, self.service.wallet_state_manager.main_wallet
             )
         txs = await vc_wallet.generate_signed_transaction(
-            vc_id,
-            uint64(request.get("fee", 0)),
-            new_puzhash,
-            new_proof_hash=new_proof_hash,
-            provider_inner_puzhash=provider_inner_puzhash,
-            reuse_puzhash=request.get("reuse_puzhash", None),
+            parsed_request.vc_id,
+            parsed_request.fee,
+            parsed_request.new_puzhash,
+            new_proof_hash=parsed_request.new_proof_hash,
+            provider_inner_puzhash=parsed_request.provider_inner_puzhash,
+            reuse_puzhash=parsed_request.reuse_puzhash,
         )
         for tx in txs:
             await self.service.wallet_state_manager.add_pending_transaction(tx)
@@ -3375,7 +3409,13 @@ class WalletRpcApi:
             "transactions": [tx.to_json_dict_convenience(self.service.config) for tx in txs],
         }
 
-    async def add_vc_proofs(self, request) -> Dict:
+    async def vc_add_proofs(self, request) -> Dict:
+        """
+        Add a set of proofs to the DB that can be used when spending a VC. VCs are near useless until their proofs have
+        been added.
+        :param request: 'proofs' is a dictionary of key/value pairs
+        :return:
+        """
         # get VC wallet
         for _, wallet in self.service.wallet_state_manager.wallets.items():
             if WalletType(wallet.type()) == WalletType.VC:
@@ -3392,7 +3432,19 @@ class WalletRpcApi:
 
         return {}
 
-    async def get_proofs_for_root(self, request) -> Dict:
+    async def vc_get_proofs_for_root(self, request) -> Dict:
+        """
+        Given a specified vc root, get any proofs associated with that root.
+        :param request: must specify 'root' representing the tree hash of some set of proofs
+        :return: a dictionary of root hashes mapped to dictionaries of key value pairs of 'proofs'
+        """
+
+        @streamable
+        @dataclasses.dataclass(frozen=True)
+        class VCGetProofsForRoot(Streamable):
+            root: bytes32
+
+        parsed_request = VCGetProofsForRoot.from_json_dict(request)
         # get VC wallet
         for _, wallet in self.service.wallet_state_manager.wallets.items():
             if WalletType(wallet.type()) == WalletType.VC:
@@ -3405,12 +3457,26 @@ class WalletRpcApi:
                 self.service.wallet_state_manager, self.service.wallet_state_manager.main_wallet
             )
 
-        vc_proofs: Optional[VCProofs] = await vc_wallet.store.get_proofs_for_root(bytes32.from_hexstr(request["root"]))
+        vc_proofs: Optional[VCProofs] = await vc_wallet.store.get_proofs_for_root(parsed_request.root)
         if vc_proofs is None:
             raise ValueError("no proofs found for specified root")
         return {"proofs": vc_proofs.key_value_pairs}
 
-    async def vc_revoke_vc(self, request) -> Dict:
+    async def vc_revoke(self, request) -> Dict:
+        """
+        Revoke an on chain VC provided the correct DID is available
+        :param request: required 'vc_parent_id' for the VC coin. Standard transaction params 'fee' & 'reuse_puzhash'.
+        :return: all relevant 'transactions'
+        """
+
+        @streamable
+        @dataclasses.dataclass(frozen=True)
+        class VCRevoke(Streamable):
+            vc_parent_id: bytes32
+            fee: uint64 = uint64(0)
+            reuse_puzhash: Optional[bool] = None
+
+        parsed_request = VCRevoke.from_json_dict(request)
         # get VC wallet
         for _, wallet in self.service.wallet_state_manager.wallets.items():
             if WalletType(wallet.type()) == WalletType.VC:
@@ -3424,10 +3490,10 @@ class WalletRpcApi:
             )
 
         txs = await vc_wallet.revoke_vc(
-            bytes32.from_hexstr(request["vc_parent_id"]),
+            parsed_request.vc_parent_id,
             self.service.get_full_node_peer(),
-            uint64(request.get("fee", 0)),
-            reuse_puzhash=request.get("reuse_puzhash", None),
+            parsed_request.fee,
+            parsed_request.reuse_puzhash,
         )
         for tx in txs:
             await self.service.wallet_state_manager.add_pending_transaction(tx)
