@@ -148,19 +148,6 @@ def match_tp_covenant_adapter(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tup
         return None
 
 
-def solve_tp_covenant_adapter(
-    covenant_solutions: List[Program], lineage_proof: LineageProof, inner_solution: Program
-) -> Program:
-    solution: Program = Program.to(
-        [
-            covenant_solutions,
-            lineage_proof.to_program(),
-            inner_solution,
-        ]
-    )
-    return solution
-
-
 ##################################
 # Update w/ DID Transfer Program #
 ##################################
@@ -394,7 +381,7 @@ class VerifiedCredential(Streamable):
             transfer_program,
             wrapped_inner_puzzle_hash,  # type: ignore
         ).get_tree_hash_precalc(wrapped_inner_puzzle_hash)
-        curried_singleton_hash: Program = puzzle_for_singleton(
+        curried_singleton_hash: bytes32 = puzzle_for_singleton(
             launcher_coin.name(),
             metadata_layer_hash,  # type: ignore
         ).get_tree_hash_precalc(metadata_layer_hash)

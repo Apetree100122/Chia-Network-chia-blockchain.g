@@ -34,8 +34,7 @@ from chia.data_layer.data_layer_wallet import DataLayerWallet
 from chia.data_layer.dl_wallet_store import DataLayerStore
 from chia.pools.pool_puzzles import SINGLETON_LAUNCHER_HASH, solution_to_pool_state
 from chia.pools.pool_wallet import PoolWallet
-from chia.protocols import wallet_protocol
-from chia.protocols.wallet_protocol import CoinState
+from chia.protocols.wallet_protocol import CoinState, NewPeakWallet
 from chia.rpc.rpc_server import StateChangedProtocol
 from chia.server.outbound_message import NodeType
 from chia.server.server import ChiaServer
@@ -100,7 +99,7 @@ from chia.wallet.vc_wallet.vc_wallet import VCWallet
 from chia.wallet.wallet import Wallet
 from chia.wallet.wallet_blockchain import WalletBlockchain
 from chia.wallet.wallet_coin_record import WalletCoinRecord
-from chia.wallet.wallet_coin_store import WalletCoinStore
+from chia.wallet.wallet_coin_store import HashFilter, WalletCoinStore
 from chia.wallet.wallet_info import WalletInfo
 from chia.wallet.wallet_interested_store import WalletInterestedStore
 from chia.wallet.wallet_nft_store import WalletNftStore
@@ -1073,13 +1072,13 @@ class WalletStateManager:
         ph_to_index_cache: LRUCache[bytes32, uint32] = LRUCache(100)
 
         coin_names = [coin_state.coin.name() for coin_state in coin_states]
-        local_records = await self.coin_store.get_coin_records(coin_names)
+        local_records = await self.coin_store.get_coin_records(coin_id_filter=HashFilter.include(coin_names))
 
         for coin_name, coin_state in zip(coin_names, coin_states):
             if peer.closed:
                 raise ConnectionError("Connection closed")
             self.log.debug("Add coin state: %s: %s", coin_name, coin_state)
-            local_record = local_records.get(coin_name)
+            local_record = local_records.coin_id_to_record.get(coin_name)
             rollback_wallets = None
             try:
                 async with self.db_wrapper.writer():
@@ -1665,8 +1664,8 @@ class WalletStateManager:
         return wr.to_coin_record(timestamp)
 
     async def get_coin_records_by_coin_ids(self, **kwargs: Any) -> List[CoinRecord]:
-        records = await self.coin_store.get_coin_records(**kwargs)
-        return [await self.get_coin_record_by_wallet_record(record) for record in records.values()]
+        result = await self.coin_store.get_coin_records(**kwargs)
+        return [await self.get_coin_record_by_wallet_record(record) for record in result.records]
 
     async def is_addition_relevant(self, addition: Coin) -> bool:
         """
@@ -1794,7 +1793,7 @@ class WalletStateManager:
 
         return filtered
 
-    async def new_peak(self, peak: wallet_protocol.NewPeakWallet) -> None:
+    async def new_peak(self, peak: NewPeakWallet) -> None:
         for wallet_id, wallet in self.wallets.items():
             if wallet.type() == WalletType.POOLING_WALLET:
                 assert isinstance(wallet, PoolWallet)
@@ -1838,3 +1837,15 @@ class WalletStateManager:
                 ), f"WalletType.DATA_LAYER should be a DataLayerWallet instance got: {type(wallet).__name__}"
                 return wallet
         raise ValueError("DataLayerWallet not available")
+
+    async def get_or_create_vc_wallet(self) -> VCWallet:
+        for _, wallet in self.wallets.items():
+            if WalletType(wallet.type()) == WalletType.VC:
+                assert isinstance(wallet, VCWallet)
+                vc_wallet: VCWallet = wallet
+                break
+        else:
+            # Create a new VC wallet
+            vc_wallet = await VCWallet.create_new_vc_wallet(self, self.main_wallet)
+
+        return vc_wallet
