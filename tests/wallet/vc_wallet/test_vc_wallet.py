@@ -113,7 +113,7 @@ async def test_vc_lifecycle(self_hostname: str, two_wallet_nodes_services: Any, 
     wallet_node_0 = wallet_service_0._node
     wallet_node_1 = wallet_service_1._node
     wallet_0 = wallet_node_0.wallet_state_manager.main_wallet
-    wallet_1 = wallet_node_0.wallet_state_manager.main_wallet
+    wallet_1 = wallet_node_1.wallet_state_manager.main_wallet
 
     client_0 = await WalletRpcClient.create(
         bt.config["self_hostname"],
@@ -224,7 +224,9 @@ async def test_vc_lifecycle(self_hostname: str, two_wallet_nodes_services: Any, 
     await full_node_api.wait_for_wallet_synced(wallet_node=wallet_node_1, timeout=20)
 
     # Check the other wallet recieved it
-    assert len(await wallet_node_0.wallet_state_manager.get_all_wallet_info_entries(wallet_type=WalletType.CRCAT)) == 1
+    await time_out_assert_not_none(
+        15, check_length, 1, wallet_node_1.wallet_state_manager.get_all_wallet_info_entries, WalletType.CRCAT
+    )
 
     # Revoke VC
     vc_record_updated = await client_0.vc_get(vc_record_updated.vc.launcher_id)
