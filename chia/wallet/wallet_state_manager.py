@@ -53,7 +53,7 @@ from chia.util.ints import uint32, uint64, uint128
 from chia.util.lru_cache import LRUCache
 from chia.util.path import path_from_root
 from chia.wallet.cat_wallet.cat_constants import DEFAULT_CATS
-from chia.wallet.cat_wallet.cat_info import CRCATInfo
+from chia.wallet.cat_wallet.cat_info import CATInfo, CRCATInfo
 from chia.wallet.cat_wallet.cat_utils import construct_cat_puzzle, match_cat_puzzle
 from chia.wallet.cat_wallet.cat_wallet import CATWallet
 from chia.wallet.db_wallet.db_wallet_puzzles import MIRROR_PUZZLE_HASH
@@ -785,6 +785,18 @@ class WalletStateManager:
                     crcat_info: CRCATInfo = CRCATInfo.from_bytes(bytes.fromhex(wallet_info.data))
                     if crcat_info.limitations_program_hash == crcat.tail_hash:
                         return WalletIdentifier(wallet_info.id, WalletType(wallet_info.type))
+                # We didn't find a matching CR-CAT wallet, but maybe we have a matching CAT wallet that we can convert
+                for wallet_info in await self.get_all_wallet_info_entries(wallet_type=WalletType.CAT):
+                    cat_info: CATInfo = CATInfo.from_bytes(bytes.fromhex(wallet_info.data))
+                    found_cat_wallet = self.wallets[wallet_info.id]
+                    assert isinstance(found_cat_wallet, CATWallet)
+                    if cat_info.limitations_program_hash == crcat.tail_hash:
+                        await CRCATWallet.convert_to_cr(
+                            found_cat_wallet,
+                            crcat.authorized_providers,
+                            ProofsChecker.from_program(uncurry_puzzle(crcat.proofs_checker)),
+                        )
+                        return WalletIdentifier(wallet_info.id, WalletType(WalletType.CRCAT))
             if bytes(tail_hash).hex()[2:] in self.default_cats or self.config.get(
                 "automatically_add_unknown_cats", False
             ):

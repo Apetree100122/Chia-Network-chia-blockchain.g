@@ -17,7 +17,7 @@ from chia.types.coin_spend import CoinSpend
 from chia.types.spend_bundle import SpendBundle
 from chia.util.byte_types import hexstr_to_bytes
 from chia.util.hash import std_hash
-from chia.util.ints import uint32, uint64
+from chia.util.ints import uint8, uint32, uint64
 from chia.wallet.cat_wallet.cat_info import CRCATInfo
 from chia.wallet.cat_wallet.cat_wallet import CATWallet
 from chia.wallet.lineage_proof import LineageProof
@@ -144,6 +144,34 @@ class CRCATWallet(CATWallet):
         self.authorized_providers = self.info.authorized_providers
         self.proofs_checker = self.info.proofs_checker
         return self
+
+    @classmethod
+    async def convert_to_cr(
+        cls,
+        cat_wallet: CATWallet,
+        authorized_providers: List[bytes32],
+        proofs_checker: ProofsChecker,
+    ) -> None:
+        replace_self = cls()
+        replace_self.cost_of_single_tx = 78000000  # Measured in testing
+        replace_self.standard_wallet = cat_wallet.standard_wallet
+        replace_self.log = logging.getLogger(cat_wallet.get_name())
+
+        replace_self.wallet_state_manager = cat_wallet.wallet_state_manager
+        replace_self.authorized_providers = authorized_providers
+        replace_self.proofs_checker = proofs_checker
+
+        replace_self.info = CRCATInfo(
+            cat_wallet.cat_info.limitations_program_hash, None, authorized_providers, proofs_checker
+        )
+        replace_self.wallet_info = await cat_wallet.wallet_state_manager.user_store.update_wallet(
+            WalletInfo(
+                cat_wallet.id(), cat_wallet.get_name(), uint8(WalletType.CRCAT.value), bytes(replace_self.info).hex()
+            )
+        )
+        replace_self.store = cat_wallet.wallet_state_manager.cr_cat_store
+
+        cat_wallet.wallet_state_manager.wallets[cat_wallet.id()] = replace_self
 
     @classmethod
     def type(cls) -> WalletType:
