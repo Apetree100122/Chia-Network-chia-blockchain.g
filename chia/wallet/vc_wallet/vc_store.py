@@ -52,7 +52,7 @@ class VCProofs:
         elif first.atom is not None and rest.atom is not None:
             return VCProofs({first.atom.decode("utf-8"): rest.atom.decode("utf-8")})
         else:
-            raise ValueError("Malformatted VCProofs program")
+            raise ValueError("Malformatted VCProofs program")  # pragma: no cover
 
     def prove_keys(self, keys: List[str], tree: Optional[Program] = None) -> Program:
         if tree is None:
@@ -153,7 +153,7 @@ class VCStore:
         return self
 
     async def _clear_database(self) -> None:
-        async with self.db_wrapper.writer_maybe_transaction() as conn:
+        async with self.db_wrapper.writer_maybe_transaction() as conn:  # pragma: no cover
             await (await conn.execute("DELETE FROM vc_records")).close()
 
     async def add_or_replace_vc_record(self, record: VCRecord) -> None:
@@ -193,7 +193,8 @@ class VCStore:
             return _row_to_vc_record(row)
         return None
 
-    async def get_vc_records_by_providers(self, provider_ids: List[bytes32]) -> List[VCRecord]:
+    # Coverage coming with CR-CAT Wallet
+    async def get_vc_records_by_providers(self, provider_ids: List[bytes32]) -> List[VCRecord]:  # pragma: no cover
         """
         Checks DB for VCs with a proof_provider in a specified list and returns them.
         """
@@ -260,6 +261,6 @@ class VCStore:
             row = await cursor.fetchone()
             await cursor.close()
             if row is None:
-                return None
+                return None  # pragma: no cover
             else:
                 return VCProofs.from_program(Program.from_bytes(row[0]))

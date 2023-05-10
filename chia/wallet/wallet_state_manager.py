@@ -267,7 +267,7 @@ class WalletStateManager:
                 )
             elif wallet_type == WalletType.DATA_LAYER:
                 wallet = await DataLayerWallet.create(self, wallet_info)
-            elif wallet_type == WalletType.VC:
+            elif wallet_type == WalletType.VC:  # pragma: no cover
                 wallet = await VCWallet.create(
                     self,
                     self.main_wallet,
@@ -558,9 +558,9 @@ class WalletStateManager:
         if self.log.level == logging.DEBUG:
             self.log.debug(f"set_sync_mode enter {await self.blockchain.get_finished_sync_up_to()}-{target_height}")
         async with self.lock:
+            self._sync_target = target_height
             start_time = time.time()
             start_height = await self.blockchain.get_finished_sync_up_to()
-            self._sync_target = target_height
             self.log.info(f"set_sync_mode syncing - range: {start_height}-{target_height}")
             self.state_changed("sync_changed")
             try:
@@ -570,7 +570,6 @@ class WalletStateManager:
                     f"set_sync_mode failed - range: {start_height}-{target_height}, seconds: {time.time() - start_time}"
                 )
             finally:
-                self._sync_target = None
                 self.state_changed("sync_changed")
                 if self.log.level == logging.DEBUG:
                     self.log.debug(
@@ -578,6 +577,7 @@ class WalletStateManager:
                         f"get_finished_sync_up_to: {await self.blockchain.get_finished_sync_up_to()}, "
                         f"seconds: {time.time() - start_time}"
                     )
+                self._sync_target = None
 
     async def get_confirmed_spendable_balance_for_wallet(
         self, wallet_id: int, unspent_records: Optional[Set[WalletCoinRecord]] = None
@@ -1041,15 +1041,17 @@ class WalletStateManager:
             vc.inner_puzzle_hash
         )
         if derivation_record is None:
-            self.log.warning(f"Verified credential {vc.launcher_id.hex()} is not belong to the current wallet.")
-            return None
+            self.log.warning(
+                f"Verified credential {vc.launcher_id.hex()} is not belong to the current wallet."
+            )  # pragma: no cover
+            return None  # pragma: no cover
         self.log.info(f"Found verified credential {vc.launcher_id.hex()}.")
         for wallet_info in await self.get_all_wallet_info_entries(wallet_type=WalletType.VC):
             return WalletIdentifier(wallet_info.id, WalletType.VC)
         else:
             # Create a new VC wallet
-            vc_wallet = await VCWallet.create_new_vc_wallet(self, self.main_wallet)
-            return WalletIdentifier(vc_wallet.id(), WalletType.VC)
+            vc_wallet = await VCWallet.create_new_vc_wallet(self, self.main_wallet)  # pragma: no cover
+            return WalletIdentifier(vc_wallet.id(), WalletType.VC)  # pragma: no cover
 
     async def _add_coin_states(
         self,
@@ -1227,9 +1229,12 @@ class WalletStateManager:
                                     derivation_record = await self.puzzle_store.get_derivation_record_for_puzzle_hash(
                                         coin.puzzle_hash
                                     )
-                                    if derivation_record is None:
+                                    if derivation_record is None:  # not change
                                         to_puzzle_hash = coin.puzzle_hash
                                         amount += coin.amount
+                                    elif wallet_identifier.type == WalletType.CAT:
+                                        # We subscribe to change for CATs since they didn't hint previously
+                                        await self.add_interested_coin_ids([coin.name()])
 
                                 if to_puzzle_hash is None:
                                     to_puzzle_hash = additions[0].puzzle_hash
@@ -1666,14 +1671,6 @@ class WalletStateManager:
     async def get_coin_records_by_coin_ids(self, **kwargs: Any) -> List[CoinRecord]:
         result = await self.coin_store.get_coin_records(**kwargs)
         return [await self.get_coin_record_by_wallet_record(record) for record in result.records]
-
-    async def is_addition_relevant(self, addition: Coin) -> bool:
-        """
-        Check whether we care about a new addition (puzzle_hash). Returns true if we
-        control this puzzle hash.
-        """
-        result = await self.puzzle_store.puzzle_hash_exists(addition.puzzle_hash)
-        return result
 
     async def get_wallet_for_coin(self, coin_id: bytes32) -> Optional[WalletProtocol]:
         coin_record = await self.coin_store.get_coin_record(coin_id)

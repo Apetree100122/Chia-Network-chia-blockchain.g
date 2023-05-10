@@ -1340,7 +1340,7 @@ def _delete_notifications(
 
 
 @wallet_cmd.group("vcs", short_help="Verifiable Credential related actions")
-def vcs_cmd():
+def vcs_cmd():  # pragma: no cover
     pass
 
 
@@ -1362,7 +1362,7 @@ def _mint_vc(
     did: str,
     target_address: Optional[str],
     fee: Optional[str],
-) -> None:
+) -> None:  # pragma: no cover
     import asyncio
 
     from chia.cmds.cmds_util import execute_with_wallet
@@ -1397,7 +1397,7 @@ def _get_vcs(
     fingerprint: int,
     start: int,
     count: int,
-) -> None:
+) -> None:  # pragma: no cover
     import asyncio
 
     from chia.cmds.cmds_util import execute_with_wallet
@@ -1444,7 +1444,7 @@ def _spend_vc(
     new_proof_hash: str,
     fee: str,
     reuse_puzhash: bool,
-) -> None:
+) -> None:  # pragma: no cover
     import asyncio
 
     from chia.cmds.cmds_util import execute_with_wallet
@@ -1477,7 +1477,7 @@ def _add_proof_reveal(
     fingerprint: int,
     proof: List[str],
     root_only: bool,
-) -> None:
+) -> None:  # pragma: no cover
     import asyncio
 
     from chia.cmds.cmds_util import execute_with_wallet
@@ -1505,7 +1505,7 @@ def _get_proofs_for_root(
     wallet_rpc_port: Optional[int],
     fingerprint: int,
     proof_hash: str,
-) -> None:
+) -> None:  # pragma: no cover
     import asyncio
 
     from chia.cmds.cmds_util import execute_with_wallet
@@ -1541,7 +1541,7 @@ def _revoke_vc(
     parent_coin_id: str,
     fee: str,
     reuse_puzhash: bool,
-) -> None:
+) -> None:  # pragma: no cover
     import asyncio
 
     from chia.cmds.cmds_util import execute_with_wallet

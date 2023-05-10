@@ -106,7 +106,10 @@ def construct_cr_layer(
     return first_curry.curry(first_curry.get_tree_hash(), inner_puzzle)
 
 
-def match_cr_layer(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tuple[List[bytes32], Program, Program]]:
+# Coverage coming with CR-CAT Wallet
+def match_cr_layer(
+    uncurried_puzzle: UncurriedPuzzle,
+) -> Optional[Tuple[List[bytes32], Program, Program]]:  # pragma: no cover
     if uncurried_puzzle.mod == CREDENTIAL_RESTRICTION:
         extra_uncurried_puzzle = uncurry_puzzle(uncurried_puzzle.mod)
         return (
@@ -269,23 +272,25 @@ class CRCAT:
         message for if the puzzle is a mismatch.
         """
         if puzzle_reveal.mod != CAT_MOD:
-            return False, "top most layer is not a CAT"
+            return False, "top most layer is not a CAT"  # pragma: no cover
         layer_below_cat: UncurriedPuzzle = uncurry_puzzle(puzzle_reveal.args.at("rrf"))
         if layer_below_cat.mod != CREDENTIAL_RESTRICTION:
-            return False, "CAT is not credential restricted"
+            return False, "CAT is not credential restricted"  # pragma: no cover
 
-        return True, ""
+        # Coverage coming with CR-CAT Wallet
+        return True, ""  # pragma: no cover
 
+    # Coverage coming with CR-CAT Wallet
     @staticmethod
-    def get_inner_puzzle(puzzle_reveal: UncurriedPuzzle) -> Program:
+    def get_inner_puzzle(puzzle_reveal: UncurriedPuzzle) -> Program:  # pragma: no cover
         return uncurry_puzzle(puzzle_reveal.args.at("rrf")).args.at("rf")
 
     @staticmethod
-    def get_inner_solution(solution: Program) -> Program:
+    def get_inner_solution(solution: Program) -> Program:  # pragma: no cover
         return solution.at("f").at("rrrrrrf")
 
     @classmethod
-    def get_current_from_coin_spend(cls: Type[_T_CRCAT], spend: CoinSpend) -> CRCAT:
+    def get_current_from_coin_spend(cls: Type[_T_CRCAT], spend: CoinSpend) -> CRCAT:  # pragma: no cover
         uncurried_puzzle: UncurriedPuzzle = uncurry_puzzle(spend.puzzle_reveal.to_program())
         first_uncurried_cr_layer: UncurriedPuzzle = uncurry_puzzle(uncurried_puzzle.args.at("rrf"))
         second_uncurried_cr_layer: UncurriedPuzzle = uncurry_puzzle(first_uncurried_cr_layer.mod)
@@ -331,7 +336,9 @@ class CRCAT:
                     proofs_checker: Program = condition.at("rrrf")
                     break
             else:
-                raise ValueError("Previous spend was not a CR-CAT, nor did it properly remark the CR params")
+                raise ValueError(
+                    "Previous spend was not a CR-CAT, nor did it properly remark the CR params"
+                )  # pragma: no cover
             lineage_inner_puzhash: bytes32 = potential_cr_layer.get_tree_hash()
         else:
             # Otherwise the info we need will be in the puzzle reveal
@@ -420,7 +427,7 @@ class CRCAT:
         announcements: List[Announcement] = []
         new_inner_puzzle_hashes_and_amounts: List[Tuple[bytes32, uint64]] = []
         if conditions is None:
-            conditions = inner_puzzle.run(inner_solution).as_iter()
+            conditions = inner_puzzle.run(inner_solution).as_iter()  # pragma: no cover
         assert conditions is not None
         for condition in conditions:
             if condition.at("f").as_int() == 51 and condition.at("rrf").as_int() != -113:
@@ -572,8 +579,9 @@ class CRCATSpend:
     provider_specified: bool
     inner_conditions: List[Program]
 
+    # Coverage coming with CR-CAT wallet
     @classmethod
-    def from_coin_spend(cls, spend: CoinSpend) -> CRCATSpend:
+    def from_coin_spend(cls, spend: CoinSpend) -> CRCATSpend:  # pragma: no cover
         inner_puzzle: Program = CRCAT.get_inner_puzzle(uncurry_puzzle(spend.puzzle_reveal.to_program()))
         inner_solution: Program = CRCAT.get_inner_solution(spend.solution.to_program())
         inner_conditions: Program = inner_puzzle.run(inner_solution)

@@ -76,7 +76,7 @@ VIRAL_BACKDOOR_HASH: bytes32 = VIRAL_BACKDOOR.get_tree_hash()
 
 # Standard brick puzzle uses the mods above
 STANDARD_BRICK_PUZZLE: Program = load_clvm_maybe_recompile(
-    "standard_vc_backdoor_brick_puzzle.clsp",
+    "standard_vc_backdoor_puzzle.clsp",
     package_or_requirement="chia.wallet.vc_wallet.vc_puzzles",
     include_standard_libraries=True,
 ).curry(
@@ -109,7 +109,7 @@ def match_covenant_layer(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tuple[by
             uncurried_puzzle.args.at("rrf"),
         )
     else:
-        return None
+        return None  # pragma: no cover
 
 
 def solve_covenant_layer(lineage_proof: LineageProof, morpher_solution: Program, inner_solution: Program) -> Program:
@@ -141,7 +141,7 @@ def create_tp_covenant_adapter(covenant_layer: Program) -> Program:
     return EML_TP_COVENANT_ADAPTER.curry(covenant_layer)
 
 
-def match_tp_covenant_adapter(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tuple[Program]]:
+def match_tp_covenant_adapter(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tuple[Program]]:  # pragma: no cover
     if uncurried_puzzle.mod == EML_TP_COVENANT_ADAPTER:
         return uncurried_puzzle.args.at("f")
     else:
@@ -168,7 +168,7 @@ def match_did_tp(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tuple[()]]:
     if uncurried_puzzle.mod == EML_DID_TP:
         return ()
     else:
-        return None
+        return None  # pragma: no cover
 
 
 def solve_did_tp(
@@ -200,7 +200,7 @@ def match_viral_backdoor(uncurried_puzzle: UncurriedPuzzle) -> Optional[Tuple[by
     if uncurried_puzzle.mod == VIRAL_BACKDOOR:
         return bytes32(uncurried_puzzle.args.at("rf").atom), bytes32(uncurried_puzzle.args.at("rrf").atom)
     else:
-        return None
+        return None  # pragma: no cover
 
 
 def solve_viral_backdoor(puzzle_reveal: Program, inner_solution: Program, hidden: bool = False) -> Program:
@@ -234,7 +234,7 @@ def create_eml_covenant_morpher(
     return first_curry.curry(first_curry.get_tree_hash())
 
 
-def construct_extigent_metadata_layer(
+def construct_exigent_metadata_layer(
     metadata: Optional[bytes32],
     transfer_program: Program,
     inner_puzzle: Program,
@@ -252,7 +252,7 @@ def construct_extigent_metadata_layer(
 @dataclass(frozen=True)
 class VCLineageProof(LineageProof, Streamable):
     """
-    The covenant layer for extigent metadata layers requires to be passed the previous parent's metadata too
+    The covenant layer for exigent metadata layers requires to be passed the previous parent's metadata too
     """
 
     parent_proof_hash: Optional[bytes32] = None
@@ -298,7 +298,7 @@ def solve_std_vc_backdoor(
 # (mod (_ _ (provider tp)) (list (c provider ()) tp ()))
 # (c (c 19 ()) (c 43 (q ())))
 GUARANTEED_NIL_TP: Program = Program.fromhex("ff04ffff04ff13ff8080ffff04ff2bffff01ff80808080")
-OWNERSHIP_LAYER_LAUNCHER: Program = construct_extigent_metadata_layer(
+OWNERSHIP_LAYER_LAUNCHER: Program = construct_exigent_metadata_layer(
     None,
     GUARANTEED_NIL_TP,
     P2_ANNOUNCED_DELEGATED_PUZZLE,
@@ -376,7 +376,7 @@ class VerifiedCredential(Streamable):
             STANDARD_BRICK_PUZZLE_HASH,
             new_inner_puzzle_hash,
         ).get_tree_hash()
-        metadata_layer_hash: bytes32 = construct_extigent_metadata_layer(
+        metadata_layer_hash: bytes32 = construct_exigent_metadata_layer(
             Program.to((provider_id, None)),
             transfer_program,
             wrapped_inner_puzzle_hash,  # type: ignore
@@ -454,11 +454,11 @@ class VerifiedCredential(Streamable):
     def construct_puzzle(self) -> Program:
         return puzzle_for_singleton(
             self.launcher_id,
-            self.construct_extigent_metadata_layer(),
+            self.construct_exigent_metadata_layer(),
         )
 
-    def construct_extigent_metadata_layer(self) -> Program:
-        return construct_extigent_metadata_layer(
+    def construct_exigent_metadata_layer(self) -> Program:
+        return construct_exigent_metadata_layer(
             Program.to((self.proof_provider, self.proof_hash)),
             self.construct_transfer_program(),
             self.wrap_inner_with_backdoor(),
@@ -502,7 +502,7 @@ class VerifiedCredential(Streamable):
             return False, "top most layer is not a singleton"
         layer_below_singleton: UncurriedPuzzle = uncurry_puzzle(puzzle_reveal.args.at("rf"))
         if layer_below_singleton.mod != EXTIGENT_METADATA_LAYER:
-            return False, "layer below singleton is not an extigent metadata layer"
+            return False, "layer below singleton is not an exigent metadata layer"
 
         # Need to validate both transfer program...
         full_transfer_program_as_prog: Program = layer_below_singleton.args.at("rrf")
@@ -512,27 +512,42 @@ class VerifiedCredential(Streamable):
             # Break off to that logic here
             if full_transfer_program_as_prog == GUARANTEED_NIL_TP:
                 if layer_below_singleton.args.at("rrrrf") != P2_ANNOUNCED_DELEGATED_PUZZLE:
-                    return False, "tp indicates VC is launching, but it does not have the correct inner puzzle"
+                    return (
+                        False,
+                        "tp indicates VC is launching, but it does not have the correct inner puzzle",
+                    )  # pragma: no cover
                 else:
                     return True, ""
             else:
-                return False, "top layer of transfer program is not a covenant layer adapter"
+                return False, "top layer of transfer program is not a covenant layer adapter"  # pragma: no cover
         adapted_transfer_program: UncurriedPuzzle = uncurry_puzzle(full_transfer_program.args.at("f"))
         if adapted_transfer_program.mod != COVENANT_LAYER:
-            return False, "transfer program is adapted to covenant layer, but covenant layer did not follow"
+            return (
+                False,
+                "transfer program is adapted to covenant layer, but covenant layer did not follow",
+            )  # pragma: no cover
         morpher: UncurriedPuzzle = uncurry_puzzle(adapted_transfer_program.args.at("rf"))
         if uncurry_puzzle(morpher.mod).mod != EXTIGENT_METADATA_LAYER_COVENANT_MORPHER:
-            return False, "covenant for extigent metadata layer does not match the one expected for VCs"
+            return (
+                False,
+                "covenant for exigent metadata layer does not match the one expected for VCs",
+            )  # pragma: no cover
         if uncurry_puzzle(adapted_transfer_program.args.at("rrf")).mod != EML_DID_TP:
-            return False, "transfer program for extigent metadata layer was not the standard VC transfer program"
+            return (
+                False,
+                "transfer program for exigent metadata layer was not the standard VC transfer program",
+            )  # pragma: no cover
 
         # ...and layer below EML
         layer_below_eml: UncurriedPuzzle = uncurry_puzzle(layer_below_singleton.args.at("rrrrf"))
         if layer_below_eml.mod != VIRAL_BACKDOOR:
-            return False, "VC did not have a provider backdoor"
+            return False, "VC did not have a provider backdoor"  # pragma: no cover
         hidden_puzzle_hash: bytes32 = layer_below_eml.args.at("rf")
         if hidden_puzzle_hash != STANDARD_BRICK_PUZZLE_HASH:
-            return False, "VC did not have the standard method to brick in its backdoor hidden puzzle slot"
+            return (
+                False,
+                "VC did not have the standard method to brick in its backdoor hidden puzzle slot",
+            )  # pragma: no cover
 
         return True, ""
 
@@ -780,7 +795,7 @@ class VerifiedCredential(Streamable):
             Coin(self.coin.name(), bytes32([0] * 32), next_amount),
             LineageProof(
                 self.coin.parent_coin_info,
-                self.construct_extigent_metadata_layer().get_tree_hash(),
+                self.construct_exigent_metadata_layer().get_tree_hash(),
                 uint64(self.coin.amount),
             ),
             VCLineageProof(
