@@ -144,6 +144,11 @@ def solve_cr_layer(
     return solution
 
 
+# For the "pending approval" state
+def construct_pending_approval_state(puzzle_hash: bytes32, amount: uint64) -> Program:
+    return PENDING_VC_ANNOUNCEMENT.curry(Program.to([[51, puzzle_hash, amount, [puzzle_hash]]]))
+
+
 _T_CRCAT = TypeVar("_T_CRCAT", bound="CRCAT")
 
 

@@ -7,7 +7,7 @@ from blspy import G2Element
 
 from chia.rpc.wallet_rpc_client import WalletRpcClient
 from chia.simulator.full_node_simulator import FullNodeSimulator
-from chia.simulator.time_out_assert import time_out_assert_not_none
+from chia.simulator.time_out_assert import time_out_assert, time_out_assert_not_none
 from chia.types.blockchain_format.coin import coin_as_list
 from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
@@ -203,13 +203,13 @@ async def test_vc_lifecycle(self_hostname: str, two_wallet_nodes_services: Any, 
     await time_out_assert_not_none(
         15, check_length, 1, wallet_node_0.wallet_state_manager.get_all_wallet_info_entries, WalletType.CRCAT
     )
-    cr_cat_wallet_id: uint16 = (
+    cr_cat_wallet_id_0: uint16 = (
         await wallet_node_0.wallet_state_manager.get_all_wallet_info_entries(wallet_type=WalletType.CRCAT)
     )[0].id
-    cr_cat_wallet: CRCATWallet = wallet_node_0.wallet_state_manager.wallets[cr_cat_wallet_id]
-    assert await wallet_node_0.wallet_state_manager.get_wallet_for_asset_id(cr_cat_wallet.get_asset_id()) is not None
+    cr_cat_wallet_0: CRCATWallet = wallet_node_0.wallet_state_manager.wallets[cr_cat_wallet_id_0]
+    assert await wallet_node_0.wallet_state_manager.get_wallet_for_asset_id(cr_cat_wallet_0.get_asset_id()) is not None
     tx = await client_0.cat_spend(
-        cr_cat_wallet.id(),
+        cr_cat_wallet_0.id(),
         uint64(100),
         encode_puzzle_hash(await wallet_1.get_new_puzzlehash(), "txch"),
         uint64(2000000000),
@@ -227,6 +227,12 @@ async def test_vc_lifecycle(self_hostname: str, two_wallet_nodes_services: Any, 
     await time_out_assert_not_none(
         15, check_length, 1, wallet_node_1.wallet_state_manager.get_all_wallet_info_entries, WalletType.CRCAT
     )
+    cr_cat_wallet_id_1: uint16 = (
+        await wallet_node_1.wallet_state_manager.get_all_wallet_info_entries(wallet_type=WalletType.CRCAT)
+    )[0].id
+    cr_cat_wallet_1: CRCATWallet = wallet_node_1.wallet_state_manager.wallets[cr_cat_wallet_id_1]
+    await time_out_assert(15, cr_cat_wallet_1.get_confirmed_balance, 0)
+    await time_out_assert(15, cr_cat_wallet_1.get_unconfirmed_balance, 100)
 
     # Revoke VC
     vc_record_updated = await client_0.vc_get(vc_record_updated.vc.launcher_id)

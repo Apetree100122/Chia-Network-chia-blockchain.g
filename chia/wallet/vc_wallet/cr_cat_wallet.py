@@ -25,11 +25,12 @@ from chia.wallet.outer_puzzles import AssetType
 from chia.wallet.payment import Payment
 from chia.wallet.puzzle_drivers import PuzzleInfo
 from chia.wallet.transaction_record import TransactionRecord
+from chia.wallet.util.compute_hints import compute_coin_hints
 from chia.wallet.util.compute_memos import compute_memos
 from chia.wallet.util.transaction_type import TransactionType
 from chia.wallet.util.wallet_sync_utils import fetch_coin_spend_for_coin_state
 from chia.wallet.util.wallet_types import WalletType
-from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, ProofsChecker
+from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, ProofsChecker, construct_pending_approval_state
 from chia.wallet.vc_wallet.cr_cat_store import CRCATStore
 from chia.wallet.vc_wallet.vc_drivers import VerifiedCredential
 from chia.wallet.vc_wallet.vc_wallet import VCWallet
@@ -199,8 +200,24 @@ class CRCATWallet(CATWallet):
     async def puzzle_solution_received(self, coin_spend: CoinSpend, coin: Coin) -> None:
         try:
             new_cr_cats: List[CRCAT] = CRCAT.get_next_from_coin_spend(coin_spend)
+            hint_dict, _ = compute_coin_hints(coin_spend)
             cr_cat: CRCAT = list(filter(lambda c: c.coin.name() == coin.name(), new_cr_cats))[0]
-            await self.store.add_or_replace_crcat(cr_cat)
+            if (
+                await self.wallet_state_manager.puzzle_store.get_derivation_record_for_puzzle_hash(
+                    cr_cat.inner_puzzle_hash
+                )
+                is not None
+            ):
+                await self.store.add_or_replace_crcat(cr_cat)
+            elif (
+                cr_cat.inner_puzzle_hash
+                == construct_pending_approval_state(
+                    hint_dict[coin.name()],
+                    uint64(coin.amount),
+                ).get_tree_hash()
+            ):
+                return None
+
         except Exception:
             # The parent is not a CAT which means we need to scrub all of its children from our DB
             child_coin_records = await self.wallet_state_manager.coin_store.get_coin_records_by_parent_id(
@@ -498,7 +515,10 @@ class CRCATWallet(CATWallet):
         for amount, puzhash, memo_list in zip(amounts, puzzle_hashes, memos):
             memos_with_hint: List[bytes] = [puzhash]
             memos_with_hint.extend(memo_list)
-            payments.append(Payment(puzhash, amount, memos_with_hint))
+            # Force wrap the outgoing coins in the pending state
+            payments.append(
+                Payment(construct_pending_approval_state(puzhash, amount).get_tree_hash(), amount, memos_with_hint)
+            )
 
         payment_sum = sum([p.amount for p in payments])
         if not ignore_max_send_amount:

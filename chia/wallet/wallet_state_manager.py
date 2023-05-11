@@ -90,7 +90,7 @@ from chia.wallet.util.wallet_sync_utils import (
     last_change_height_cs,
 )
 from chia.wallet.util.wallet_types import WalletIdentifier, WalletType
-from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, ProofsChecker
+from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, ProofsChecker, construct_pending_approval_state
 from chia.wallet.vc_wallet.cr_cat_store import CRCATStore
 from chia.wallet.vc_wallet.cr_cat_wallet import CRCATWallet
 from chia.wallet.vc_wallet.vc_drivers import VerifiedCredential
@@ -780,9 +780,17 @@ class WalletStateManager:
                 # Since CRCAT wallet doesn't have derivation path, every CRCAT will go through this code path
                 # Just use the first cat coin
                 crcat: CRCAT = CRCAT.get_next_from_coin_spend(coin_spend)[0]
-                # Make sure we control the inner puzzle
-                if await self.puzzle_store.get_derivation_record_for_puzzle_hash(crcat.inner_puzzle_hash) is None:
+                # Make sure we control the inner puzzle or we control it if it's wrapped in the pending state
+                if (
+                    await self.puzzle_store.get_derivation_record_for_puzzle_hash(crcat.inner_puzzle_hash) is None
+                    and crcat.inner_puzzle_hash
+                    != construct_pending_approval_state(
+                        hint_dict[coin_name],
+                        uint64(coin_state.coin.amount),
+                    ).get_tree_hash()
+                ):
                     return None
+
                 # Check if we already have a wallet
                 for wallet_info in await self.get_all_wallet_info_entries(wallet_type=WalletType.CRCAT):
                     crcat_info: CRCATInfo = CRCATInfo.from_bytes(bytes.fromhex(wallet_info.data))
