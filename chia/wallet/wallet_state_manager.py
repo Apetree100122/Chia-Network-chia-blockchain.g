@@ -807,6 +807,7 @@ class WalletStateManager:
                             crcat.authorized_providers,
                             ProofsChecker.from_program(uncurry_puzzle(crcat.proofs_checker)),
                         )
+                        self.state_changed("converted cat wallet to cr", wallet_info.id)
                         return WalletIdentifier(wallet_info.id, WalletType(WalletType.CRCAT))
             if bytes(tail_hash).hex()[2:] in self.default_cats or self.config.get(
                 "automatically_add_unknown_cats", False
