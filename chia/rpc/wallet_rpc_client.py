@@ -17,7 +17,8 @@ from chia.wallet.trade_record import TradeRecord
 from chia.wallet.trading.offer import Offer
 from chia.wallet.transaction_record import TransactionRecord
 from chia.wallet.transaction_sorting import SortKey
-from chia.wallet.util.wallet_types import WalletType
+from chia.wallet.util.query_filter import TransactionTypeFilter
+from chia.wallet.util.wallet_types import CoinType, WalletType
 from chia.wallet.vc_wallet.vc_store import VCRecord
 
 
@@ -128,6 +129,7 @@ class WalletRpcClient(RpcClient):
         sort_key: SortKey = None,
         reverse: bool = False,
         to_address: Optional[str] = None,
+        type_filter: Optional[TransactionTypeFilter] = None,
     ) -> List[TransactionRecord]:
         request: Dict[str, Any] = {"wallet_id": wallet_id}
 
@@ -141,6 +143,9 @@ class WalletRpcClient(RpcClient):
 
         if to_address is not None:
             request["to_address"] = to_address
+
+        if type_filter is not None:
+            request["type_filter"] = type_filter.to_json_dict()
 
         res = await self.fetch(
             "get_transactions",
@@ -172,6 +177,7 @@ class WalletRpcClient(RpcClient):
         max_coin_amount: uint64 = uint64(0),
         exclude_amounts: Optional[List[uint64]] = None,
         exclude_coin_ids: Optional[List[str]] = None,
+        puzzle_decorator_override: Optional[List[Dict[str, Union[str, int, bool]]]] = None,
         reuse_puzhash: Optional[bool] = None,
     ) -> TransactionRecord:
         if memos is None:
@@ -184,6 +190,7 @@ class WalletRpcClient(RpcClient):
                 "max_coin_amount": max_coin_amount,
                 "exclude_coin_amounts": exclude_amounts,
                 "exclude_coin_ids": exclude_coin_ids,
+                "puzzle_decorator": puzzle_decorator_override,
                 "reuse_puzhash": reuse_puzhash,
             }
         else:
@@ -197,6 +204,7 @@ class WalletRpcClient(RpcClient):
                 "max_coin_amount": max_coin_amount,
                 "exclude_coin_amounts": exclude_amounts,
                 "exclude_coin_ids": exclude_coin_ids,
+                "puzzle_decorator": puzzle_decorator_override,
                 "reuse_puzhash": reuse_puzhash,
             }
         res = await self.fetch("send_transaction", send_dict)
@@ -223,6 +231,26 @@ class WalletRpcClient(RpcClient):
             )
 
         return TransactionRecord.from_json_dict_convenience(response["transaction"])
+
+    async def get_coins(
+        self, wallet_id: int, coin_type: CoinType, start: int = 0, end: int = 50, reverse: bool = False
+    ) -> Dict:
+        response = await self.fetch(
+            "get_coins",
+            {"wallet_id": wallet_id, "start": start, "end": end, "coin_type": coin_type, "reverse": reverse},
+        )
+        return response
+
+    async def spend_clawback_coins(
+        self,
+        coin_ids: List[str],
+        fee: int = 0,
+    ) -> Dict:
+        response = await self.fetch(
+            "spend_clawback_coins",
+            {"coin_ids": coin_ids, "fee": fee},
+        )
+        return response
 
     async def delete_unconfirmed_transactions(self, wallet_id: int) -> None:
         await self.fetch(

@@ -63,6 +63,8 @@ from chia.wallet.notification_store import Notification
 from chia.wallet.outer_puzzles import AssetType
 from chia.wallet.payment import Payment
 from chia.wallet.puzzle_drivers import PuzzleInfo, Solver
+from chia.wallet.puzzles.clawback.drivers import match_clawback_puzzle
+from chia.wallet.puzzles.clawback.metadata import AutoClaimSettings, ClawbackMetadata
 from chia.wallet.puzzles.p2_delegated_puzzle_or_hidden_puzzle import puzzle_hash_for_synthetic_public_key
 from chia.wallet.singleton import create_singleton_puzzle
 from chia.wallet.trade_record import TradeRecord
@@ -72,9 +74,10 @@ from chia.wallet.uncurried_puzzle import uncurry_puzzle
 from chia.wallet.util.address_type import AddressType, is_valid_address
 from chia.wallet.util.compute_hints import compute_coin_hints
 from chia.wallet.util.compute_memos import compute_memos
+from chia.wallet.util.query_filter import TransactionTypeFilter
 from chia.wallet.util.transaction_type import TransactionType
 from chia.wallet.util.wallet_sync_utils import fetch_coin_spend_for_coin_state
-from chia.wallet.util.wallet_types import WalletType
+from chia.wallet.util.wallet_types import CoinType, WalletType
 from chia.wallet.vc_wallet.vc_store import VCProofs
 from chia.wallet.vc_wallet.vc_wallet import VCWallet
 from chia.wallet.wallet import CHIP_0002_SIGN_MESSAGE_PREFIX, Wallet
@@ -118,6 +121,8 @@ class WalletRpcApi:
             "/push_transactions": self.push_transactions,
             "/farm_block": self.farm_block,  # Only when node simulator is running
             "/get_timestamp_for_height": self.get_timestamp_for_height,
+            "/set_auto_claim": self.set_auto_claim,
+            "/get_auto_claim": self.get_auto_claim,
             # this function is just here for backwards-compatibility. It will probably
             # be removed in the future
             "/get_initial_freeze_period": self.get_initial_freeze_period,
@@ -133,6 +138,8 @@ class WalletRpcApi:
             "/get_next_address": self.get_next_address,
             "/send_transaction": self.send_transaction,
             "/send_transaction_multi": self.send_transaction_multi,
+            "/spend_clawback_coins": self.spend_clawback_coins,
+            "/get_coins": self.get_coins,
             "/get_farmed_amount": self.get_farmed_amount,
             "/create_signed_transaction": self.create_signed_transaction,
             "/delete_unconfirmed_transactions": self.delete_unconfirmed_transactions,
@@ -573,6 +580,25 @@ class WalletRpcApi:
     async def get_timestamp_for_height(self, request) -> EndpointResult:
         return {"timestamp": await self.service.get_timestamp_for_height(uint32(request["height"]))}
 
+    async def set_auto_claim(self, request) -> EndpointResult:
+        """
+        Set auto claim merkle coins config
+        :param request: Example {"enable": true, "tx_fee": 100000, "min_amount": 0, "batch_size": 50}
+        :return:
+        """
+        return self.service.set_auto_claim(AutoClaimSettings.from_json_dict(request))
+
+    async def get_auto_claim(self, request) -> EndpointResult:
+        """
+        Get auto claim merkle coins config
+        :param request: None
+        :return:
+        """
+        auto_claim_settings = AutoClaimSettings.from_json_dict(
+            self.service.wallet_state_manager.config.get("auto_claim", {})
+        )
+        return auto_claim_settings.to_json_dict()
+
     ##########################################################################################
     # Wallet Management
     ##########################################################################################
@@ -858,15 +884,38 @@ class WalletRpcApi:
         to_puzzle_hash: Optional[bytes32] = None
         if to_address is not None:
             to_puzzle_hash = decode_puzzle_hash(to_address)
+        type_filter = None
+        if "type_filter" in request:
+            type_filter = TransactionTypeFilter.from_json_dict(request["type_filter"])
 
         transactions = await self.service.wallet_state_manager.tx_store.get_transactions_between(
-            wallet_id, start, end, sort_key=sort_key, reverse=reverse, to_puzzle_hash=to_puzzle_hash
+            wallet_id,
+            start,
+            end,
+            sort_key=sort_key,
+            reverse=reverse,
+            to_puzzle_hash=to_puzzle_hash,
+            type_filter=type_filter,
         )
+        txs = [
+            (await self._convert_tx_puzzle_hash(tr)).to_json_dict_convenience(self.service.config)
+            for tr in transactions
+        ]
+        # Format for clawback transactions
+        clawback_types = {TransactionType.INCOMING_CLAWBACK_RECEIVE.value, TransactionType.INCOMING_CLAWBACK_SEND.value}
+        for tx in txs:
+            if tx["type"] in clawback_types and tx["spend_bundle"] is not None:
+                spend_bundle: SpendBundle = SpendBundle.from_json_dict(tx["spend_bundle"])
+                puzzle = Program.from_bytes(bytes(spend_bundle.coin_spends[0].puzzle_reveal))
+                solution = Program.from_bytes(bytes(spend_bundle.coin_spends[0].solution))
+                uncurried = uncurry_puzzle(puzzle)
+                clawback_metadata = match_clawback_puzzle(uncurried, puzzle, solution)
+                if clawback_metadata is not None:
+                    tx["metadata"] = clawback_metadata.to_json_dict()
+                    tx["metadata"]["coin_id"] = Coin.from_json_dict(tx["additions"][0]).name().hex()
+
         return {
-            "transactions": [
-                (await self._convert_tx_puzzle_hash(tr)).to_json_dict_convenience(self.service.config)
-                for tr in transactions
-            ],
+            "transactions": txs,
             "wallet_id": wallet_id,
         }
 
@@ -960,6 +1009,7 @@ class WalletRpcApi:
                 max_coin_amount=max_coin_amount,
                 exclude_coin_amounts=exclude_coin_amounts,
                 exclude_coins=exclude_coins,
+                puzzle_decorator_override=request.get("puzzle_decorator", None),
                 reuse_puzhash=request.get("reuse_puzhash", None),
             )
             await wallet.push_transaction(tx)
@@ -990,6 +1040,82 @@ class WalletRpcApi:
 
         # Transaction may not have been included in the mempool yet. Use get_transaction to check.
         return {"transaction": transaction, "transaction_id": tr.name}
+
+    async def get_coins(self, request) -> EndpointResult:
+        wallet_id = int(request["wallet_id"])
+        coin_type = CoinType(request["coin_type"])
+        start = request.get("start", 0)
+        end = request.get("end", 50)
+        reverse = request.get("reverse", False)
+
+        coins = await self.service.wallet_state_manager.coin_store.get_coin_records_between(
+            wallet_id,
+            start,
+            end,
+            reverse=reverse,
+            coin_type=coin_type,
+        )
+        return {
+            "coins": [
+                {
+                    "coin_id": coin.name().hex(),
+                    "coin_type": coin.coin_type,
+                    "amount": coin.coin.amount,
+                    "puzzle_hash": coin.coin.puzzle_hash.hex(),
+                    "parent_coin": coin.coin.parent_coin_info.hex(),
+                    "metadata": self.service.wallet_state_manager.deserialize_coin_metadata(coin.metadata, coin_type),
+                    "confirmed_height": coin.confirmed_block_height,
+                    "spent_height": coin.spent_block_height,
+                }
+                for coin in coins
+            ],
+            "wallet_id": wallet_id,
+        }
+
+    async def spend_clawback_coins(self, request) -> EndpointResult:
+        """Spend clawback coins that were sent (to claw them back) or received (to claim them).
+
+        :param coin_ids: list of coin ids to be spent
+        :param batch_size: number of coins to spend per bundle
+        :param fee: transaction fee in mojos
+        :return:
+        """
+        if "coin_ids" not in request:
+            raise ValueError("Coin IDs are required.")
+        coin_ids: List[bytes32] = [bytes32.from_hexstr(coin) for coin in request["coin_ids"]]
+        tx_fee: uint64 = uint64(request.get("fee", 0))
+        # Get inner puzzle
+        coin_records = await self.service.wallet_state_manager.coin_store.get_coin_records(
+            coin_id_filter=HashFilter.include(coin_ids),
+            coin_type=CoinType.CLAWBACK,
+        )
+
+        coins: Dict[Coin, ClawbackMetadata] = {}
+        batch_size = request.get(
+            "batch_size", self.service.wallet_state_manager.config.get("auto_claim", {}).get("batch_size", 50)
+        )
+        tx_id_list: List[bytes] = []
+        for coin_id, coin_record in coin_records.coin_id_to_record.items():
+            if coin_record.metadata is None:
+                log.warning(f"Skip merkle coin f{coin_id.hex()}, metadata cannot be None.")
+                continue
+            if coin_record.spent:
+                log.warning(f"Coin {coin_id.hex()} is already spent.")
+                continue
+            if coin_record.wallet_type != WalletType.STANDARD_WALLET:
+                log.warning("Only support standard XCH wallet.")
+                continue
+            metadata = ClawbackMetadata.from_bytes(coin_record.metadata.blob)
+            coins[coin_record.coin] = metadata
+            if len(coins) >= batch_size:
+                tx_id_list.extend((await self.service.wallet_state_manager.spend_clawback_coins(coins, tx_fee)))
+                coins = {}
+        if len(coins) > 0:
+            tx_id_list.extend((await self.service.wallet_state_manager.spend_clawback_coins(coins, tx_fee)))
+        return {
+            "success": True,
+            "transaction_ids": [tx.hex() for tx in tx_id_list],
+        }
 
     async def delete_unconfirmed_transactions(self, request) -> EndpointResult:
         wallet_id = uint32(request["wallet_id"])

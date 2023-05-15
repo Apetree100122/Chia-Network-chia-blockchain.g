@@ -34,6 +34,15 @@ class CoinType(IntEnum):
     CLAWBACK = 1
 
 
+class RemarkDataType:
+    """
+    We use a relative random unique number here to represent a type of Remark announcement.
+    This will reduce the chance of collision with Remark announcements in other puzzles.
+    """
+
+    CLAWBACK = bytes.fromhex("C21B5973")
+
+
 @dataclass(frozen=True)
 class WalletIdentifier:
     id: uint32

@@ -49,8 +49,6 @@ class CRCATWallet(CATWallet):
     standard_wallet: Wallet
     cost_of_single_tx: int
     store: CRCATStore
-    authorized_providers: List[bytes32]
-    proofs_checker: ProofsChecker
 
     @staticmethod
     def default_wallet_name_for_unknown_cat(limitations_program_hash_hex: str) -> str:
