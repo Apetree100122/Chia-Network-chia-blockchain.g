@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass, replace
+from enum import IntEnum
 from typing import Iterable, List, Optional, Tuple, Type, TypeVar
 
 from clvm.casts import int_to_bytes
@@ -12,7 +13,7 @@ from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.coin_spend import CoinSpend
 from chia.util.hash import std_hash
-from chia.util.ints import uint64
+from chia.util.ints import uint16, uint64
 from chia.util.streamable import Streamable, streamable
 from chia.wallet.cat_wallet.cat_utils import construct_cat_puzzle
 from chia.wallet.lineage_proof import LineageProof
@@ -21,6 +22,7 @@ from chia.wallet.puzzles.cat_loader import CAT_MOD
 from chia.wallet.puzzles.load_clvm import load_clvm_maybe_recompile
 from chia.wallet.puzzles.singleton_top_layer_v1_1 import SINGLETON_LAUNCHER_HASH, SINGLETON_MOD_HASH
 from chia.wallet.uncurried_puzzle import UncurriedPuzzle, uncurry_puzzle
+from chia.wallet.util.wallet_types import CoinType
 from chia.wallet.vc_wallet.vc_drivers import (
     COVENANT_LAYER_HASH,
     EML_TP_COVENANT_ADAPTER_HASH,
@@ -32,6 +34,8 @@ from chia.wallet.vc_wallet.vc_drivers import (
 )
 
 # Mods
+from chia.wallet.wallet_coin_record import WalletCoinRecord
+
 CREDENTIAL_RESTRICTION: Program = load_clvm_maybe_recompile(
     "credential_restriction.clsp",
     package_or_requirement="chia.wallet.vc_wallet.cr_puzzles",
@@ -625,3 +629,26 @@ class ProofsChecker(Streamable):
             raise ValueError("Puzzle was not a proof checker")
 
         return cls([flag.at("f").atom.decode("utf8") for flag in uncurried_puzzle.args.at("f").as_iter()])
+
+
+class CRCATVersion(IntEnum):
+    V1 = uint16(1)
+
+
+@streamable
+@dataclass(frozen=True)
+class CRCATMetadata(Streamable):
+    lineage_proof: LineageProof
+    inner_puzzle_hash: bytes32
+
+    @classmethod
+    def from_coin_record(cls, coin_record: WalletCoinRecord) -> CRCATMetadata:
+        if coin_record.coin_type not in {CoinType.CRCAT, CoinType.CRCAT_PENDING}:
+            raise ValueError(f"Attempting to spend a non-CRCAT coin: {coin_record.coin.name().hex()}")
+        if coin_record.metadata is None:
+            raise ValueError(f"Attempting to spend a CRCAT coin without metadata: {coin_record.coin.name().hex()}")
+        try:
+            metadata: CRCATMetadata = CRCATMetadata.from_bytes(coin_record.metadata.blob)
+            return metadata
+        except Exception as e:
+            raise ValueError(f"Error parsing CRCAT metadata: {e}")

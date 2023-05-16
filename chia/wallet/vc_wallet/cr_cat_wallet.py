@@ -18,6 +18,7 @@ from chia.types.spend_bundle import SpendBundle
 from chia.util.byte_types import hexstr_to_bytes
 from chia.util.hash import std_hash
 from chia.util.ints import uint8, uint32, uint64
+from chia.util.misc import VersionedBlob
 from chia.wallet.cat_wallet.cat_info import CRCATInfo
 from chia.wallet.cat_wallet.cat_wallet import CATWallet
 from chia.wallet.lineage_proof import LineageProof
@@ -27,14 +28,21 @@ from chia.wallet.puzzle_drivers import PuzzleInfo
 from chia.wallet.transaction_record import TransactionRecord
 from chia.wallet.util.compute_hints import compute_coin_hints
 from chia.wallet.util.compute_memos import compute_memos
+from chia.wallet.util.query_filter import HashFilter
 from chia.wallet.util.transaction_type import TransactionType
 from chia.wallet.util.wallet_sync_utils import fetch_coin_spend_for_coin_state
-from chia.wallet.util.wallet_types import WalletType
-from chia.wallet.vc_wallet.cr_cat_drivers import CRCAT, ProofsChecker, construct_pending_approval_state
-from chia.wallet.vc_wallet.cr_cat_store import CRCATStore
+from chia.wallet.util.wallet_types import CoinType, WalletType
+from chia.wallet.vc_wallet.cr_cat_drivers import (
+    CRCAT,
+    CRCATMetadata,
+    CRCATVersion,
+    ProofsChecker,
+    construct_pending_approval_state,
+)
 from chia.wallet.vc_wallet.vc_drivers import VerifiedCredential
 from chia.wallet.vc_wallet.vc_wallet import VCWallet
 from chia.wallet.wallet import Wallet
+from chia.wallet.wallet_coin_record import WalletCoinRecord
 from chia.wallet.wallet_info import WalletInfo
 
 if TYPE_CHECKING:
@@ -48,7 +56,6 @@ class CRCATWallet(CATWallet):
     info: CRCATInfo
     standard_wallet: Wallet
     cost_of_single_tx: int
-    store: CRCATStore
 
     @staticmethod
     def default_wallet_name_for_unknown_cat(limitations_program_hash_hex: str) -> str:
@@ -92,13 +99,10 @@ class CRCATWallet(CATWallet):
                     return w
 
         self.wallet_state_manager = wallet_state_manager
-        self.authorized_providers = authorized_providers
-        self.proofs_checker = proofs_checker
 
         self.info = CRCATInfo(tail_hash, None, authorized_providers, proofs_checker)
         info_as_string = bytes(self.info).hex()
         self.wallet_info = await wallet_state_manager.user_store.create_wallet(name, WalletType.CRCAT, info_as_string)
-        self.store = self.wallet_state_manager.cr_cat_store
 
         await self.wallet_state_manager.add_new_wallet(self)
         return self
@@ -139,9 +143,6 @@ class CRCATWallet(CATWallet):
         self.wallet_info = wallet_info
         self.standard_wallet = wallet
         self.info = CRCATInfo.from_bytes(hexstr_to_bytes(self.wallet_info.data))
-        self.store = self.wallet_state_manager.cr_cat_store
-        self.authorized_providers = self.info.authorized_providers
-        self.proofs_checker = self.info.proofs_checker
         return self
 
     @classmethod
@@ -155,11 +156,7 @@ class CRCATWallet(CATWallet):
         replace_self.cost_of_single_tx = 78000000  # Measured in testing
         replace_self.standard_wallet = cat_wallet.standard_wallet
         replace_self.log = logging.getLogger(cat_wallet.get_name())
-
         replace_self.wallet_state_manager = cat_wallet.wallet_state_manager
-        replace_self.authorized_providers = authorized_providers
-        replace_self.proofs_checker = proofs_checker
-
         replace_self.info = CRCATInfo(
             cat_wallet.cat_info.limitations_program_hash, None, authorized_providers, proofs_checker
         )
@@ -168,7 +165,6 @@ class CRCATWallet(CATWallet):
                 cat_wallet.id(), cat_wallet.get_name(), uint8(WalletType.CRCAT.value), bytes(replace_self.info).hex()
             )
         )
-        replace_self.store = cat_wallet.wallet_state_manager.cr_cat_store
 
         cat_wallet.wallet_state_manager.wallets[cat_wallet.id()] = replace_self
 
@@ -191,11 +187,11 @@ class CRCATWallet(CATWallet):
         try:
             coin_state = await self.wallet_state_manager.wallet_node.get_coin_state([coin.parent_coin_info], peer=peer)
             coin_spend = await fetch_coin_spend_for_coin_state(coin_state[0], peer)
-            await self.puzzle_solution_received(coin_spend, coin)
+            await self.add_crcat_coin(coin_spend, coin, height)
         except Exception as e:
             self.log.debug(f"Exception: {e}, traceback: {traceback.format_exc()}")
 
-    async def puzzle_solution_received(self, coin_spend: CoinSpend, coin: Coin) -> None:
+    async def add_crcat_coin(self, coin_spend: CoinSpend, coin: Coin, height: uint32) -> None:
         try:
             new_cr_cats: List[CRCAT] = CRCAT.get_next_from_coin_spend(coin_spend)
             hint_dict, _ = compute_coin_hints(coin_spend)
@@ -206,7 +202,8 @@ class CRCATWallet(CATWallet):
                 )
                 is not None
             ):
-                await self.store.add_or_replace_crcat(cr_cat)
+                self.log.info(f"Found CRCAT coin {coin.name().hex()}")
+                is_pending = False
             elif (
                 cr_cat.inner_puzzle_hash
                 == construct_pending_approval_state(
@@ -214,10 +211,28 @@ class CRCATWallet(CATWallet):
                     uint64(coin.amount),
                 ).get_tree_hash()
             ):
+                self.log.info(f"Found pending approval CRCAT coin {coin.name().hex()}")
+                is_pending = True
+            else:
+                self.log.error(f"Unknown CRCAT inner puzzle, coin ID: {coin.name().hex()}")
                 return None
-
+            coin_record = WalletCoinRecord(
+                coin,
+                uint32(height),
+                uint32(0),
+                False,
+                False,
+                WalletType.CRCAT,
+                self.id(),
+                CoinType.CRCAT_PENDING if is_pending else CoinType.CRCAT,
+                VersionedBlob(
+                    CRCATVersion.V1.value, bytes(CRCATMetadata(cr_cat.lineage_proof, cr_cat.inner_puzzle_hash))
+                ),
+            )
+            await self.wallet_state_manager.coin_store.add_coin_record(coin_record)
         except Exception:
             # The parent is not a CAT which means we need to scrub all of its children from our DB
+            self.log.error(f"Cannot add CRCAT coin: {traceback.format_exc()}")
             child_coin_records = await self.wallet_state_manager.coin_store.get_coin_records_by_parent_id(
                 coin_spend.coin.name()
             )
@@ -248,13 +263,43 @@ class CRCATWallet(CATWallet):
             "inner_puzzle_for_cat_puzhash is a legacy method and is not available on CR-CAT wallets"
         )
 
+    async def get_cat_spendable_coins(self, records: Optional[Set[WalletCoinRecord]] = None) -> List[WalletCoinRecord]:
+        result: List[WalletCoinRecord] = []
+
+        record_list: Set[WalletCoinRecord] = await self.wallet_state_manager.get_spendable_coins_for_wallet(
+            self.id(), records
+        )
+
+        for record in record_list:
+            crcat: Optional[CRCAT] = self.coin_record_to_crcat(record)
+            if crcat is not None and crcat.lineage_proof is not None and not crcat.lineage_proof.is_none():
+                result.append(record)
+
+        return result
+
     async def convert_puzzle_hash(self, puzzle_hash: bytes32) -> bytes32:
         return puzzle_hash
 
+    def coin_record_to_crcat(self, record: Optional[WalletCoinRecord]) -> Optional[CRCAT]:
+        if record is None:
+            return None
+        else:
+            metadata: CRCATMetadata = CRCATMetadata.from_coin_record(record)
+            crcat: CRCAT = CRCAT(
+                record.coin,
+                self.info.limitations_program_hash,
+                metadata.lineage_proof,
+                self.info.authorized_providers,
+                self.info.proofs_checker.as_program(),
+                metadata.inner_puzzle_hash,
+            )
+            return crcat
+
     async def get_lineage_proof_for_coin(self, coin: Coin) -> Optional[LineageProof]:
-        potential_cr_cat: Optional[CRCAT] = await self.store.get_crcat(
-            coin.name(), self.authorized_providers, self.proofs_checker
-        )
+        record: Optional[WalletCoinRecord] = await self.wallet_state_manager.coin_store.get_coin_record(coin.name())
+        if record is None:
+            return None
+        potential_cr_cat: Optional[CRCAT] = self.coin_record_to_crcat(record)
         if potential_cr_cat is None:
             return None
         else:
@@ -363,14 +408,17 @@ class CRCATWallet(CATWallet):
         chia_tx = None
         first = True
         announcement: Announcement
-        for coin in cat_coins:
+        coin_ids: List[bytes32] = [coin.name() for coin in cat_coins]
+        coin_records: List[WalletCoinRecord] = (
+            await self.wallet_state_manager.coin_store.get_coin_records(coin_id_filter=HashFilter.include(coin_ids))
+        ).records
+        assert len(coin_records) == len(cat_coins)
+        for coin in coin_records:
             if vc is None:
-                vc = await vc_wallet.get_vc_with_provider_in(self.authorized_providers)
-            crcat: Optional[CRCAT] = await self.store.get_crcat(
-                coin.name(), self.authorized_providers, self.proofs_checker
-            )
-            if crcat is None:
-                raise RuntimeError(f"Attempting to spend a coin that we have not synced as a CR-CAT: {coin}")
+                vc = await vc_wallet.get_vc_with_provider_in(self.info.authorized_providers)
+
+            crcat: Optional[CRCAT] = self.coin_record_to_crcat(coin)
+            assert crcat is not None, f"Cannot find CRCAT for coin {coin.coin.name().hex()}"
             vc_announcements_to_make.append(crcat.expected_announcement())
             if first:
                 first = False
@@ -447,7 +495,7 @@ class CRCATWallet(CATWallet):
             raise RuntimeError("CR-CATs found an appropriate VC but that VC contains no proofs")
 
         proof_of_inclusions: Program = await vc_wallet.proof_of_inclusions_for_root_and_keys(
-            vc.proof_hash, self.proofs_checker.flags
+            vc.proof_hash, self.info.proofs_checker.flags
         )
 
         expected_announcements, coin_spends, _ = CRCAT.spend_many(

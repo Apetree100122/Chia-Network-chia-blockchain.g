@@ -32,6 +32,8 @@ class WalletType(IntEnum):
 class CoinType(IntEnum):
     NORMAL = 0
     CLAWBACK = 1
+    CRCAT_PENDING = 2
+    CRCAT = 3
 
 
 class RemarkDataType:

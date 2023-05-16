@@ -638,7 +638,13 @@ class WalletStateManager:
         # This API should change so that get_balance_from_coin_records is called for Set[WalletCoinRecord]
         # and this method is called only for the unspent_coin_records==None case.
         if unspent_coin_records is None:
-            unspent_coin_records = await self.coin_store.get_unspent_coins_for_wallet(wallet_id)
+            wallet_type: WalletType = self.wallets[uint32(wallet_id)].type()
+            if wallet_type == WalletType.CRCAT:
+                unspent_coin_records = await self.coin_store.get_unspent_coins_for_wallet(wallet_id, CoinType.CRCAT)
+                pending_crcat = await self.coin_store.get_unspent_coins_for_wallet(wallet_id, CoinType.CRCAT_PENDING)
+                unspent_coin_records = unspent_coin_records.union(pending_crcat)
+            else:
+                unspent_coin_records = await self.coin_store.get_unspent_coins_for_wallet(wallet_id)
 
         unconfirmed_tx: List[TransactionRecord] = await self.tx_store.get_unconfirmed_for_wallet(wallet_id)
         all_unspent_coins: Set[Coin] = {cr.coin for cr in unspent_coin_records}
@@ -917,6 +923,7 @@ class WalletStateManager:
                         uint64(coin_state.coin.amount),
                     ).get_tree_hash()
                 ):
+                    self.log.error(f"Unknown CRCAT inner puzzle, coin ID:{crcat.coin.name().hex()}")
                     return None
 
                 # Check if we already have a wallet
@@ -1996,8 +2003,12 @@ class WalletStateManager:
     async def get_spendable_coins_for_wallet(
         self, wallet_id: int, records: Optional[Set[WalletCoinRecord]] = None
     ) -> Set[WalletCoinRecord]:
+        wallet_type = self.wallets[uint32(wallet_id)].type()
         if records is None:
-            records = await self.coin_store.get_unspent_coins_for_wallet(wallet_id)
+            if wallet_type == WalletType.CRCAT:
+                records = await self.coin_store.get_unspent_coins_for_wallet(wallet_id, CoinType.CRCAT)
+            else:
+                records = await self.coin_store.get_unspent_coins_for_wallet(wallet_id)
 
         # Coins that are currently part of a transaction
         unconfirmed_tx: List[TransactionRecord] = await self.tx_store.get_unconfirmed_for_wallet(wallet_id)
