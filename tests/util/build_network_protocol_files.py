@@ -19,7 +19,7 @@ def get_network_protocol_filename() -> Path:
     return tests_dir / Path("protocol_messages_bytes-v" + version)
 
 
-def encode_data(data) -> bytes:
+def encode_data(data: Any) -> bytes:
     data_bytes = bytes(data)
     size = uint32(len(data_bytes))
     return size.to_bytes(4, "big") + data_bytes
@@ -189,14 +189,18 @@ def test_protocol_bytes() -> None:
 
 """
 
+    counter = 0
+
     def visitor(obj: Any, name: str) -> None:
         nonlocal result
+        nonlocal counter
         result += f"""    message_bytes, input_bytes = parse_blob(input_bytes)
-    message = type({name}).from_bytes(message_bytes)
-    assert message == {name}
-    assert bytes(message) == bytes({name})
+    message_{counter} = type({name}).from_bytes(message_bytes)
+    assert message_{counter} == {name}
+    assert bytes(message_{counter}) == bytes({name})
 
 """
+        counter += 1
 
     visit_all_messages(visitor)
 

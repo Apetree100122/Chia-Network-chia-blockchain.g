@@ -78,6 +78,7 @@ async def load_blocks_dont_validate(
             test_constants,
             block.reward_chain_block.pos_ss_cc_challenge_hash,
             cc_sp,
+            height=block.height,
         )
         assert quality_string is not None
 

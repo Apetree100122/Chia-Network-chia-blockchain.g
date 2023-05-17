@@ -51,6 +51,7 @@ from chia.server.server import ChiaServer
 from chia.server.ws_connection import WSChiaConnection
 from chia.types.blockchain_format.classgroup import ClassgroupElement
 from chia.types.blockchain_format.pool_target import PoolTarget
+from chia.types.blockchain_format.proof_of_space import calculate_prefix_bits
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.blockchain_format.sub_epoch_summary import SubEpochSummary
 from chia.types.blockchain_format.vdf import CompressibleVDFField, VDFInfo, VDFProof
@@ -1379,6 +1380,7 @@ class FullNode:
             sub_slot_iters = self.constants.SUB_SLOT_ITERS_STARTING
 
         # Notify farmers of the new signage point
+        assert peak is not None
         broadcast_farmer = farmer_protocol.NewSignagePoint(
             request.challenge_chain_vdf.challenge,
             request.challenge_chain_vdf.output.get_hash(),
@@ -1386,6 +1388,7 @@ class FullNode:
             difficulty,
             sub_slot_iters,
             request.index_from_challenge,
+            uint8(calculate_prefix_bits(self.constants, 0 if peak is None else peak.height)),
         )
         msg = make_msg(ProtocolMessageTypes.new_signage_point, broadcast_farmer)
         await self.server.send_to_all([msg], NodeType.FARMER)
@@ -2172,6 +2175,7 @@ class FullNode:
                     next_difficulty,
                     next_sub_slot_iters,
                     uint8(0),
+                    uint8(calculate_prefix_bits(self.constants, uint32(0) if peak is None else peak.height)),
                 )
                 msg = make_msg(ProtocolMessageTypes.new_signage_point, broadcast_farmer)
                 await self.server.send_to_all([msg], NodeType.FARMER)
