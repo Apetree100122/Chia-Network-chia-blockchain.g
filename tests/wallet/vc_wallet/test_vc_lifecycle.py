@@ -530,7 +530,7 @@ async def test_vc_lifecycle(test_syncing: bool, cost_logger: CostLogger) -> None
 
         # Update the proofs with a proper announcement
         NEW_PROOFS: Program = Program.to((("test", "1"), ("test2", "1")))
-        MALICIOUS_PROOFS: Program = Program.to(("malicious", True))
+        MALICIOUS_PROOFS: Program = Program.to(("malicious", "1"))
         NEW_PROOF_HASH: bytes32 = NEW_PROOFS.get_tree_hash()
         expected_announcement, update_spend, vc = vc.do_spend(
             ACS,
