@@ -1,5 +1,8 @@
-# chia-blockchain
+# chia-blockchain    
+[![OpenSSF Best Practices](https://bestpractices.coreinfrastructure.org/projects/7655/badge)](https://bestpractices.coreinfrastructure.org/projects/7655)This data is available under the Creative Commons Attribution version 3.0 or later license (CC-BY-3.0+). All are free to share and add the data, but must give appropriate credit. Please credit Alexander Petree and the OpenSSF Best Practices badge contributors.
+Project badge entry owned by: Alexander Petree.
 
+Entry created on 2023-07-26 03:21:40 UTC, last updated on 2023-07-26 03:50:53 UTC.
 ![Alt text](https://www.chia.net/img/chia_logo.svg)
 
 | Current Release/main | Development Branch/dev |
