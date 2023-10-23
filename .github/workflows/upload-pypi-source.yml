@@ -82,7 +82,7 @@ jobs:
     steps:
     - uses: chia-network/actions/clean-workspace@main
 
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
         submodules: recursive
@@ -132,7 +132,7 @@ jobs:
     steps:
     - uses: chia-network/actions/clean-workspace@main
 
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
         submodules: recursive
@@ -161,7 +161,7 @@ jobs:
       - check
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         fetch-depth: 0
         submodules: recursive
